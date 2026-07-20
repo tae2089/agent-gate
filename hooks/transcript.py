@@ -78,13 +78,16 @@ def _normalize_codex(entry: dict) -> dict:
         return {"type": "user", "message": {"role": "user", "content": [
             {"type": "tool_result", "tool_use_id": payload["call_id"]}]}}
     if ptype == "token_count":
-        usage = ((payload.get("info") or {}).get("last_token_usage")
-                 if isinstance(payload.get("info"), dict) else None)
+        info = payload.get("info") if isinstance(payload.get("info"), dict) else {}
+        usage = info.get("last_token_usage")
         if isinstance(usage, dict):
             # Codex input_tokens already includes cached tokens (measured).
-            return {"type": "assistant", "message": {"role": "assistant", "usage": {
-                "input_tokens": usage.get("input_tokens") or 0,
-                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}
+            normalized = {"input_tokens": usage.get("input_tokens") or 0,
+                          "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+            window = info.get("model_context_window")
+            if isinstance(window, int) and window > 0:
+                normalized["model_context_window"] = window
+            return {"type": "assistant", "message": {"role": "assistant", "usage": normalized}}
     return entry
 
 

@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from context_watermark import context_tokens
+from context_watermark import context_tokens, context_window
 from transcript import (
     last_prompt_index,
     parse_transcript,
@@ -123,6 +123,14 @@ class CodexNormalizationTest(unittest.TestCase):
         entries = parse([codex_token_count(205011, cached=203520)])
         self.assertEqual(context_tokens(entries), 205011)
 
+    def test_token_count_carries_model_context_window(self):
+        entries = parse([codex_token_count(1000)])
+        self.assertEqual(context_window(entries), 258400)
+
+    def test_claude_usage_has_no_context_window(self):
+        from transcript_helpers import assistant_usage
+        self.assertIsNone(context_window(parse([assistant_usage(1000)])))
+
     def test_claude_entries_pass_through_unchanged(self):
         original = [user_text("hello"), tool_use("Write", {"file_path": "a.py"}, tool_use_id="t1")]
         entries = parse(original)
@@ -219,7 +227,7 @@ class CodexWatermarkE2ETest(unittest.TestCase):
         transcript.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
         hook_input = {"transcript_path": str(transcript), "cwd": str(cwd),
                       "stop_hook_active": False, "session_id": "codex-s1"}
-        return subprocess.run([sys.executable, str(WATERMARK), "--window", "258400"],
+        return subprocess.run([sys.executable, str(WATERMARK)],
                               input=json.dumps(hook_input), capture_output=True, text=True, timeout=30)
 
     def test_apply_patch_handoff_satisfies_watermark(self):
@@ -234,6 +242,21 @@ class CodexWatermarkE2ETest(unittest.TestCase):
         ], cwd)
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(proc.stdout.strip(), "")
+
+    def test_transcript_window_overrides_default(self):
+        # 190k would be 95% of the 200k default, but only 73.5% of the
+        # transcript-reported 258400 window — must not block.
+        cwd = Path(tempfile.mkdtemp())
+        proc = self.run_watermark([codex_user_message("계속"), codex_token_count(190_000)], cwd)
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_block_reason_uses_transcript_window(self):
+        cwd = Path(tempfile.mkdtemp())
+        proc = self.run_watermark([codex_user_message("계속"), codex_token_count(240_000)], cwd)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("258400", verdict["reason"])
 
 
 if __name__ == "__main__":

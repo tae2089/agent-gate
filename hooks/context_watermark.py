@@ -38,7 +38,7 @@ DEFAULT_WINDOW = 200_000
 DEFAULT_THRESHOLD = 0.9
 
 
-def context_tokens(entries: list[dict]) -> int | None:
+def _last_usage(entries: list[dict]) -> dict | None:
     last = None
     for entry in entries:
         if entry.get("type") != "assistant":
@@ -46,10 +46,23 @@ def context_tokens(entries: list[dict]) -> int | None:
         usage = (entry.get("message") or {}).get("usage")
         if isinstance(usage, dict):
             last = usage
+    return last
+
+
+def context_tokens(entries: list[dict]) -> int | None:
+    last = _last_usage(entries)
     if last is None:
         return None
     return sum(int(last.get(k) or 0) for k in
                ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+
+
+def context_window(entries: list[dict]) -> int | None:
+    """Window reported by the transcript itself (Codex token_count); None for
+    Claude transcripts, which don't carry one — callers fall back to --window."""
+    last = _last_usage(entries)
+    window = last.get("model_context_window") if last else None
+    return window if isinstance(window, int) and window > 0 else None
 
 
 def _current_turn(entries: list[dict]) -> list[dict]:
@@ -109,6 +122,7 @@ def _run_hook(hook_input: dict, window: int, threshold: float) -> int:
     tokens = context_tokens(entries)
     if tokens is None:
         return 0
+    window = context_window(entries) or window
     pct = tokens / window
     if pct < threshold:
         return 0
@@ -144,6 +158,7 @@ def run_check(window: int, transcript: str) -> int:
     if tokens is None:
         print("no usage data found")
         return 0
+    window = context_window(entries) or window
     print(f"context: {tokens}/{window} tokens ({tokens / window:.1%}), "
           "handoff status requires hook-mode cwd and current-turn result data")
     return 0
@@ -151,7 +166,8 @@ def run_check(window: int, transcript: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--window", type=int, default=DEFAULT_WINDOW, help="context window size in tokens")
+    parser.add_argument("--window", type=int, default=DEFAULT_WINDOW,
+                        help="context window in tokens; used only when the transcript reports none")
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD, help="block threshold ratio")
     parser.add_argument("--check", metavar="TRANSCRIPT", help="report usage instead of running as a hook")
     args = parser.parse_args()

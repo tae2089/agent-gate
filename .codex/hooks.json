@@ -20,7 +20,7 @@
           },
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/context_watermark.py\" --window 258400"
+            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/context_watermark.py\""
           }
         ]
       }
