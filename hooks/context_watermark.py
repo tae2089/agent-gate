@@ -21,7 +21,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from skill_invocation_verifier import parse_transcript, _tool_calls, _note  # noqa: E402
+from artifact_lint import lint_file  # noqa: E402
 
 DEFAULT_WINDOW = 200_000
 DEFAULT_THRESHOLD = 0.9
@@ -41,12 +43,27 @@ def context_tokens(entries: list[dict]) -> int | None:
                ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
 
 
-def handoff_written(entries: list[dict]) -> bool:
+def handoff_written(entries: list[dict]) -> tuple[bool, list[str]]:
+    """(a handoff Write exists, lint floor-failure notes for on-disk handoffs).
+
+    A written handoff satisfies the watermark unless its file exists on disk
+    AND fails the structural lint — then the notes feed the block reason so an
+    empty-shell handoff cannot buy a pass. Unreadable files stay fail-open.
+    """
+    written = False
+    notes = []
     for entry in entries:
         for call in _tool_calls(entry):
-            if call.name == "Write" and "handoff" in str(call.input.get("file_path", "")).lower():
-                return True
-    return False
+            path = str(call.input.get("file_path", ""))
+            if call.name != "Write" or "handoff" not in path.lower():
+                continue
+            written = True
+            result = lint_file(Path(path), "handoff")
+            if result is None or result["passed"]:
+                return True, []
+            notes.append(f"{path}: score={result['score']}, "
+                         f"missing critical sections: {', '.join(result['floor_failures']) or 'none'}")
+    return written, notes
 
 
 def run_hook(window: int, threshold: float) -> int:
@@ -68,10 +85,17 @@ def run_hook(window: int, threshold: float) -> int:
     if tokens is None:
         return 0
     pct = tokens / window
-    if pct < threshold or handoff_written(entries):
+    if pct < threshold:
         return 0
+    written, lint_notes = handoff_written(entries)
+    if written and not lint_notes:
+        return 0
+    lint_suffix = ""
+    if lint_notes:
+        lint_suffix = (" A handoff was written but failed the structural lint — fix it: "
+                       + "; ".join(lint_notes) + ".")
     reason = (
-        f"[agent-gate] Context is {pct:.0%} full ({tokens}/{window} tokens). "
+        f"[agent-gate] Context is {pct:.0%} full ({tokens}/{window} tokens).{lint_suffix} "
         "Before finishing, write a handoff artifact so work survives compaction: "
         "create _workspace/<current-task>/handoff.md (or handoff.md in cwd if no task folder) "
         "covering: current goal, work completed with file paths, key decisions and why, "

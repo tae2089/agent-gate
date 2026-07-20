@@ -93,3 +93,30 @@ class TestWatermark(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWatermarkLintIntegration(TestWatermark):
+    def test_t7_empty_shell_handoff_still_blocks_with_lint_reason(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text("# handoff\n\n## 목표\nx\n", encoding="utf-8")  # missing floors
+        self.write_transcript([
+            write_call(str(handoff)),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("failed the structural lint", verdict["reason"])
+
+    def test_t8_good_handoff_on_disk_passes(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text(
+            "# handoff\n\n## 목표\nagent-gate 작업 마무리\n\n## 완료 작업\n- scripts/artifact_lint.py 구현\n\n"
+            "## 결정\n- floor 방식 채택, 평균의 함정 방지\n\n## 검증 상태\n- unittest 통과\n\n"
+            "## 다음 단계\n- 커밋하고 README 갱신\n", encoding="utf-8")
+        self.write_transcript([
+            write_call(str(handoff)),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(proc.stdout.strip(), "")
