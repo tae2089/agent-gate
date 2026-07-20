@@ -126,6 +126,19 @@ class CodexNormalizationTest(unittest.TestCase):
                          codex_tool_output(call_id="call_9")])
         self.assertIn("call_9", successful_tool_results(entries))
 
+    def test_tool_output_preserves_structured_exit_status(self):
+        succeeded = codex_tool_output(call_id="call_ok")
+        succeeded["payload"]["output"][0]["text"] = json.dumps(
+            {"exit_code": 0, "output": json.dumps({"exit_code": 1})}
+        )
+        failed = codex_tool_output(call_id="call_failed")
+        failed["payload"]["output"][0]["text"] = json.dumps({"exit_code": 1})
+
+        successful = successful_tool_results(parse([succeeded, failed]))
+
+        self.assertIn("call_ok", successful)
+        self.assertNotIn("call_failed", successful)
+
     def test_token_count_feeds_context_tokens(self):
         entries = parse([codex_token_count(205011, cached=203520)])
         self.assertEqual(context_tokens(entries), 205011)
@@ -196,6 +209,25 @@ class CodexWatermarkE2ETest(WatermarkHarness):
         proc = self.run_hook(self.hook_input())
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "")
+
+    def test_failed_apply_patch_does_not_satisfy_watermark(self):
+        (self.dir / "handoff.md").write_text(GOOD_HANDOFF, encoding="utf-8")
+        failed_output = codex_tool_output(call_id="c1")
+        failed_output["payload"]["output"][0]["text"] = json.dumps(
+            {"exit_code": 1, "output": "patch rejected"}
+        )
+        self.write_transcript([
+            codex_user_message("계속"),
+            codex_custom_tool_call("apply_patch", "*** Update File: handoff.md\n+x", call_id="c1"),
+            failed_output,
+            codex_token_count(240_000),
+        ])
+
+        proc = self.run_hook(self.hook_input())
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotEqual(proc.stdout.strip(), "", "failed patch was treated as successful")
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
 
     def test_transcript_window_overrides_flag(self):
         # 190k is 95% of the harness's --window 200000, but only 73.5% of the

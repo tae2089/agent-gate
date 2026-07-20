@@ -72,6 +72,29 @@ _CODEX_PATCH_RE = re.compile(r"\*\*\* (Add|Update) File: ([^\n\\\"']+)")
 _PATCH_ACTION_TOOL = {"Add": "Write", "Update": "Edit"}
 
 
+def _codex_output_is_error(payload: dict) -> bool:
+    """Read failure metadata without interpreting the command's stdout."""
+    if payload.get("is_error") is True:
+        return True
+    output = payload.get("output")
+    blocks = output if isinstance(output, list) else [output]
+    for block in blocks:
+        status = block.get("text") if (
+            isinstance(block, dict) and block.get("type") == "input_text"
+        ) else block
+        if isinstance(status, str):
+            try:
+                status = json.loads(status)
+            except json.JSONDecodeError:
+                continue
+        if not isinstance(status, dict):
+            continue
+        exit_code = status.get("exit_code")
+        if status.get("is_error") is True or (type(exit_code) is int and exit_code != 0):
+            return True
+    return False
+
+
 def _normalize_codex(entry: dict) -> dict:
     """Map a Codex rollout entry to the Claude entry shape; non-Codex or
     unmappable entries pass through untouched (helpers then ignore them)."""
@@ -85,8 +108,11 @@ def _normalize_codex(entry: dict) -> dict:
         return _codex_tool_call(payload, ptype)
     if ptype in ("custom_tool_call_output", "function_call_output") \
             and isinstance(payload.get("call_id"), str):
+        result = {"type": "tool_result", "tool_use_id": payload["call_id"]}
+        if _codex_output_is_error(payload):
+            result["is_error"] = True
         return {"type": "user", "message": {"role": "user", "content": [
-            {"type": "tool_result", "tool_use_id": payload["call_id"]}]}}
+            result]}}
     if ptype == "token_count":
         info = payload.get("info")
         usage = info.get("last_token_usage") if isinstance(info, dict) else None
