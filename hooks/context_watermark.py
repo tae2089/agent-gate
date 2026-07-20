@@ -23,6 +23,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 from transcript import (  # noqa: E402
+    context_tokens,
+    context_window,
     last_prompt_index,
     parse_transcript,
     read_hook_input,
@@ -36,33 +38,6 @@ from artifact_lint import lint_file  # noqa: E402
 LABEL = "context-watermark"
 DEFAULT_WINDOW = 200_000
 DEFAULT_THRESHOLD = 0.9
-
-
-def _last_usage(entries: list[dict]) -> dict | None:
-    last = None
-    for entry in entries:
-        if entry.get("type") != "assistant":
-            continue
-        usage = (entry.get("message") or {}).get("usage")
-        if isinstance(usage, dict):
-            last = usage
-    return last
-
-
-def context_tokens(entries: list[dict]) -> int | None:
-    last = _last_usage(entries)
-    if last is None:
-        return None
-    return sum(int(last.get(k) or 0) for k in
-               ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
-
-
-def context_window(entries: list[dict]) -> int | None:
-    """Window reported by the transcript itself (Codex token_count); None for
-    Claude transcripts, which don't carry one — callers fall back to --window."""
-    last = _last_usage(entries)
-    window = last.get("model_context_window") if last else None
-    return window if isinstance(window, int) and window > 0 else None
 
 
 def _current_turn(entries: list[dict]) -> list[dict]:
