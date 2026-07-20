@@ -17,6 +17,36 @@
       "require": { "skill": "diagnosing-bugs" }
     },
     {
+      "id": "skill-md-edits-need-writing-great-skills",
+      "when": {
+        "tool": "Write|Edit",
+        "input_pattern": "SKILL\\.md"
+      },
+      "require": { "skill": "writing-great-skills" },
+      "message": "SKILL.md was written or edited without the skill-authoring discipline"
+    },
+    {
+      "id": "flow-requests-need-flow-design",
+      "when": {
+        "prompt_pattern": "(?i)(의사 ?코드|pseudo-?code|다이어그램|diagram|mermaid|플로우 ?차트|flow ?chart|시퀀스 (다이어그램|그려))"
+      },
+      "require": { "skill": "flow-design" }
+    },
+    {
+      "id": "dispatch-packet-needs-execute-dispatch-unit",
+      "when": {
+        "prompt_pattern": "(unit_id|allowed_scope|return_contract|acceptance_criteria)"
+      },
+      "require": { "skill": "execute-dispatch-unit" }
+    },
+    {
+      "id": "multi-agent-needs-decompose-and-dispatch",
+      "when": {
+        "prompt_pattern": "(?i)(멀티 ?에이전트|multi-?agent|병렬로 (나눠|분배|작업시)|에이전트 (여러|나눠)|fan ?out)"
+      },
+      "require": { "skill": "decompose-and-dispatch" }
+    },
+    {
       "id": "review-prep-needs-ready-code-review",
       "when": {
         "prompt_pattern": "(?i)(리뷰 ?(준비|컨텍스트|브리핑|요청)|review (brief|context|prep)|reviewer (instructions?|prompts?)|리뷰어 (지침|프롬프트)|severity (rubric|calibration))"
