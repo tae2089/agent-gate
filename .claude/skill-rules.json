@@ -15,6 +15,14 @@
         "prompt_pattern": "(?i)(디버깅|버그 ?(잡|고쳐|수정)|flaky|regression|root ?cause)"
       },
       "require": { "skill": "diagnosing-bugs" }
+    },
+    {
+      "id": "review-prep-needs-ready-code-review",
+      "when": {
+        "prompt_pattern": "(?i)(리뷰 ?(준비|컨텍스트|브리핑|요청)|review (brief|context|prep)|reviewer (instructions?|prompts?)|리뷰어 (지침|프롬프트)|severity (rubric|calibration))"
+      },
+      "require": { "skill": "ready-code-review" },
+      "message": "review preparation must go through ready-code-review; do not use it to perform the review itself"
     }
   ]
 }
