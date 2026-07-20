@@ -32,7 +32,7 @@ agent-gate의 context watermark 보강
 """
 
 
-class TestWatermark(unittest.TestCase):
+class WatermarkHarness(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
         self.transcript = self.dir / "session.jsonl"
@@ -53,6 +53,8 @@ class TestWatermark(unittest.TestCase):
         base.update(over)
         return base
 
+
+class TestWatermark(WatermarkHarness):
     def test_t1_below_threshold_passes(self):
         self.write_transcript([assistant_usage(100_000)])
         proc = self.run_hook(self.hook_input())
@@ -198,7 +200,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class TestWatermarkLintIntegration(TestWatermark):
+class TestWatermarkLintIntegration(WatermarkHarness):
     def test_t11_empty_shell_handoff_still_blocks_with_lint_reason(self):
         handoff = self.dir / "handoff.md"
         handoff.write_text("# handoff\n\n## 목표\nx\n", encoding="utf-8")  # missing floors
