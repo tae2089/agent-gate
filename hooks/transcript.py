@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Shared transcript parsing and hook I/O boundary for agent-gate hooks.
 
-Transcript entries are Claude Code JSONL lines. All helpers ignore sidechain
-entries and tolerate malformed shapes, because hooks must fail open.
+Transcript entries are Claude Code JSONL lines, or Codex CLI rollout lines
+({payload, timestamp, type} envelopes) which parse_transcript normalizes into
+Claude-shaped entries so every helper and hook works unchanged. All helpers
+ignore sidechain entries and tolerate malformed shapes, because hooks must
+fail open.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -37,8 +41,57 @@ def parse_transcript(path: Path) -> list[dict]:
             except json.JSONDecodeError:
                 continue  # partial line from a concurrent append
             if isinstance(entry, dict):
-                entries.append(entry)
+                entries.append(_normalize_codex(entry))
     return entries
+
+
+# Codex has no Skill tool; agents apply a skill by shell-reading its SKILL.md,
+# so a "<name>/SKILL.md" path inside a tool input is the invocation record.
+_CODEX_SKILL_RE = re.compile(r"([\w.-]+)/SKILL\.md")
+
+
+def _normalize_codex(entry: dict) -> dict:
+    """Map a Codex rollout entry to the Claude entry shape; non-Codex or
+    unmappable entries pass through untouched (helpers then ignore them)."""
+    payload = entry.get("payload")
+    if entry.get("type") not in ("event_msg", "response_item") or not isinstance(payload, dict):
+        return entry
+    ptype = payload.get("type")
+    if ptype == "user_message" and isinstance(payload.get("message"), str):
+        return {"type": "user", "message": {"role": "user", "content": payload["message"]}}
+    if ptype in ("custom_tool_call", "function_call") and isinstance(payload.get("name"), str):
+        return _codex_tool_call(payload, ptype)
+    if ptype in ("custom_tool_call_output", "function_call_output") \
+            and isinstance(payload.get("call_id"), str):
+        return {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": payload["call_id"]}]}}
+    if ptype == "token_count":
+        usage = ((payload.get("info") or {}).get("last_token_usage")
+                 if isinstance(payload.get("info"), dict) else None)
+        if isinstance(usage, dict):
+            # Codex input_tokens already includes cached tokens (measured).
+            return {"type": "assistant", "message": {"role": "assistant", "usage": {
+                "input_tokens": usage.get("input_tokens") or 0,
+                "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}}}
+    return entry
+
+
+def _codex_tool_call(payload: dict, ptype: str) -> dict:
+    raw = payload.get("arguments") if ptype == "function_call" else payload.get("input")
+    raw = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+    if ptype == "function_call":
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            parsed = None
+        input_ = parsed if isinstance(parsed, dict) else {"raw": raw}
+    else:
+        input_ = {"raw": raw}
+    content = [{"type": "tool_use", "name": payload["name"], "input": input_,
+                "id": payload.get("call_id")}]
+    for skill in dict.fromkeys(_CODEX_SKILL_RE.findall(raw)):
+        content.append({"type": "tool_use", "name": "Skill", "input": {"skill": skill}})
+    return {"type": "assistant", "message": {"role": "assistant", "content": content}}
 
 
 def prompt_text(entry: dict) -> str | None:
