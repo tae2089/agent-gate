@@ -33,7 +33,10 @@ class Check:
     description: str
     keywords: list[str] | None = None  # section checks
     pattern: str | None = None         # whole-document regex checks
+    line_ratio: float | None = None    # with pattern: share of content lines that must match
 
+
+FILE_PATH_PATTERN = r"[\w./-]+\.(md|py|go|ts|tsx|java|kt|json|yaml|yml|sh|toml)\b"
 
 HANDOFF_CHECKS = [
     Check("goal", 0.15, False, "goal section", ["목표", "goal"]),
@@ -41,11 +44,37 @@ HANDOFF_CHECKS = [
     Check("decisions", 0.20, True, "decisions/judgments section", ["결정", "판단", "decision", "judgment"]),
     Check("verified", 0.15, False, "verified-state section", ["검증", "verified", "verification"]),
     Check("next", 0.20, True, "next-steps section", ["다음", "next"]),
-    Check("file_paths", 0.15, False, "at least one file path cited",
-          pattern=r"[\w./-]+\.(md|py|go|ts|tsx|java|kt|json|yaml|yml|sh|toml)\b"),
+    Check("file_paths", 0.15, False, "at least one file path cited", pattern=FILE_PATH_PATTERN),
 ]
 
-TYPES = {"handoff": HANDOFF_CHECKS}
+# implementation.md is flat bullets by convention, so these are whole-document
+# keyword checks rather than section checks.
+IMPLEMENTATION_CHECKS = [
+    Check("approach", 0.25, False, "design approach stated",
+          pattern=r"설계|접근|구조|방식|위치|approach|design|architecture"),
+    Check("assumptions", 0.15, False, "assumptions or measured evidence labeled",
+          pattern=r"가정|전제|실측|근거|assumption|measured"),
+    Check("affected_files", 0.30, True, "affected modules/files cited", pattern=FILE_PATH_PATTERN),
+    Check("risks", 0.30, True, "risks/edge cases listed",
+          pattern=r"위험|엣지|한계|risk|edge"),
+]
+
+_WALKTHROUGH_ENTRY = r"^\[[^\]]*\]\s*(decision|error|verification)\s*:"
+
+WALKTHROUGH_CHECKS = [
+    Check("decisions", 0.35, True, "at least one decision entry",
+          pattern=r"(?m)^\[[^\]]*\]\s*decision\s*:"),
+    Check("verifications", 0.35, True, "at least one verification entry",
+          pattern=r"(?m)^\[[^\]]*\]\s*verification\s*:"),
+    Check("format_discipline", 0.30, False, "entries follow the [time] type: line format",
+          pattern=_WALKTHROUGH_ENTRY, line_ratio=0.8),
+]
+
+TYPES = {
+    "handoff": HANDOFF_CHECKS,
+    "implementation": IMPLEMENTATION_CHECKS,
+    "walkthrough": WALKTHROUGH_CHECKS,
+}
 
 
 def _sections(text: str) -> list[tuple[str, str]]:
@@ -68,13 +97,24 @@ def _section_present(check: Check, sections: list[tuple[str, str]]) -> bool:
     return False
 
 
+def _line_ratio_met(check: Check, text: str) -> bool:
+    """True when enough content lines (non-empty, non-heading) match the pattern."""
+    lines = [ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+    if not lines:
+        return False
+    matching = sum(1 for ln in lines if re.match(check.pattern, ln))
+    return matching / len(lines) >= check.line_ratio
+
+
 def lint(text: str, checks: list[Check]) -> dict:
     sections = _sections(text)
     results = {}
     score = 0.0
     floor_failures = []
     for check in checks:
-        if check.pattern:
+        if check.line_ratio is not None:
+            ok = _line_ratio_met(check, text)
+        elif check.pattern:
             ok = bool(re.search(check.pattern, text))
         else:
             ok = _section_present(check, sections)
