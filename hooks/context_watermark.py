@@ -75,6 +75,8 @@ def run_hook(window: int, threshold: float) -> int:
         "Before finishing, write a handoff artifact so work survives compaction: "
         "create _workspace/<current-task>/handoff.md (or handoff.md in cwd if no task folder) "
         "covering: current goal, work completed with file paths, key decisions and why, "
+        "user corrections and value judgments (which work was deemed low-value, wasteful, or "
+        "skippable — preserve these first, they are the most expensive to rediscover), "
         "verified state (tests/commands run), and exact next steps. Then finish the turn."
     )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))

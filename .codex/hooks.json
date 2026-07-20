@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/imtaebin/Documents/codes/agent-gate/hooks/handoff_reinject.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/imtaebin/Documents/codes/agent-gate/hooks/skill_invocation_verifier.py --rules /Users/imtaebin/Documents/codes/agent-gate/.claude/skill-rules.json"
+          },
+          {
+            "type": "command",
+            "command": "python3 /Users/imtaebin/Documents/codes/agent-gate/hooks/context_watermark.py"
+          }
+        ]
+      }
+    ]
+  }
+}

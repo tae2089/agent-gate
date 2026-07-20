@@ -13,6 +13,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/imtaebin/Documents/codes/agent-gate/hooks/handoff_reinject.py"
+          }
+        ]
+      }
     ]
   }
 }
