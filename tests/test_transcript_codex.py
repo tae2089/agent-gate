@@ -32,6 +32,7 @@ from transcript_helpers import (
 )
 
 VERIFIER = Path(__file__).resolve().parent.parent / "hooks" / "skill_invocation_verifier.py"
+WATERMARK = Path(__file__).resolve().parent.parent / "hooks" / "context_watermark.py"
 
 
 def parse(entries):
@@ -79,6 +80,19 @@ class CodexNormalizationTest(unittest.TestCase):
         skill_calls = [c for c in calls if c.name == "Skill"]
         self.assertEqual(len(skill_calls), 1)  # same skill twice → dedup
         self.assertEqual(skill_calls[0].input["skill"], "coding-quality-guardrails")
+
+    def test_handoff_path_synthesizes_write_call(self):
+        patch = "*** Update File: _workspace/task-a/handoff.md\n+content"
+        entries = parse([codex_custom_tool_call("apply_patch", patch, call_id="call_hp")])
+        writes = [c for e in entries for c in tool_calls(e) if c.name == "Write"]
+        self.assertEqual(len(writes), 1)
+        self.assertEqual(writes[0].input["file_path"], "_workspace/task-a/handoff.md")
+        self.assertEqual(writes[0].tool_use_id, "call_hp")
+
+    def test_non_handoff_basename_does_not_synthesize_write(self):
+        entries = parse([codex_custom_tool_call("exec", "cat notes/my-handoff.md")])
+        writes = [c for e in entries for c in tool_calls(e) if c.name == "Write"]
+        self.assertEqual(writes, [])
 
     def test_tool_output_counts_as_successful_result(self):
         entries = parse([codex_custom_tool_call("exec", "x", call_id="call_9"),
@@ -134,6 +148,32 @@ class CodexVerifierE2ETest(unittest.TestCase):
             codex_custom_tool_call("exec", "await tools.exec_command({\"cmd\":\"cat "
                                            "/Users/u/.agents/skills/diagnosing-bugs/SKILL.md\"})"),
         ])
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout.strip(), "")
+
+
+class CodexWatermarkE2ETest(unittest.TestCase):
+    """Regression: on Codex the handoff is written via apply_patch/exec, not a
+    Write tool — the watermark block must still be satisfiable."""
+
+    def run_watermark(self, entries, cwd):
+        transcript = cwd / "rollout.jsonl"
+        transcript.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
+        hook_input = {"transcript_path": str(transcript), "cwd": str(cwd),
+                      "stop_hook_active": False, "session_id": "codex-s1"}
+        return subprocess.run([sys.executable, str(WATERMARK), "--window", "258400"],
+                              input=json.dumps(hook_input), capture_output=True, text=True, timeout=30)
+
+    def test_apply_patch_handoff_satisfies_watermark(self):
+        from test_context_watermark import GOOD_HANDOFF
+        cwd = Path(tempfile.mkdtemp())
+        (cwd / "handoff.md").write_text(GOOD_HANDOFF, encoding="utf-8")
+        proc = self.run_watermark([
+            codex_user_message("계속"),
+            codex_custom_tool_call("apply_patch", "*** Update File: handoff.md\n+x", call_id="c1"),
+            codex_tool_output(call_id="c1"),
+            codex_token_count(240_000),
+        ], cwd)
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(proc.stdout.strip(), "")
 

@@ -49,6 +49,12 @@ def parse_transcript(path: Path) -> list[dict]:
 # so a "<name>/SKILL.md" path inside a tool input is the invocation record.
 _CODEX_SKILL_RE = re.compile(r"([\w.-]+)/SKILL\.md")
 
+# Codex has no Write tool either (files change via apply_patch/exec), so a
+# handoff path in any tool input becomes a synthetic Write. This is broader
+# than "actually wrote it" — acceptable, because the watermark still lints the
+# on-disk file, and the alternative is a block no Codex agent can ever satisfy.
+_CODEX_HANDOFF_RE = re.compile(r"[\w./~-]*handoff\.md")
+
 
 def _normalize_codex(entry: dict) -> dict:
     """Map a Codex rollout entry to the Claude entry shape; non-Codex or
@@ -91,6 +97,11 @@ def _codex_tool_call(payload: dict, ptype: str) -> dict:
                 "id": payload.get("call_id")}]
     for skill in dict.fromkeys(_CODEX_SKILL_RE.findall(raw)):
         content.append({"type": "tool_use", "name": "Skill", "input": {"skill": skill}})
+    for path in dict.fromkeys(_CODEX_HANDOFF_RE.findall(raw)):
+        if Path(path).name == "handoff.md":  # skip e.g. my-handoff.md
+            # Reuse the real call_id so the tool output marks this Write successful.
+            content.append({"type": "tool_use", "name": "Write",
+                            "input": {"file_path": path}, "id": payload.get("call_id")})
     return {"type": "assistant", "message": {"role": "assistant", "content": content}}
 
 
