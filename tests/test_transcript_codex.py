@@ -94,6 +94,21 @@ class CodexNormalizationTest(unittest.TestCase):
         writes = [c for e in entries for c in tool_calls(e) if c.name == "Write"]
         self.assertEqual(writes, [])
 
+    def test_apply_patch_add_and_update_synthesize_write_and_edit(self):
+        patch = ("*** Begin Patch\n*** Add File: docs/new.md\n+x\n"
+                 "*** Update File: hooks/foo.py\n+y\n*** End Patch")
+        entries = parse([codex_custom_tool_call("apply_patch", patch, call_id="call_ap")])
+        synth = {(c.name, c.input.get("file_path"))
+                 for e in entries for c in tool_calls(e) if c.name in ("Write", "Edit")}
+        self.assertEqual(synth, {("Write", "docs/new.md"), ("Edit", "hooks/foo.py")})
+
+    def test_exec_embedded_patch_path_stops_at_escape(self):
+        raw = ('const patch = "*** Begin Patch\\n*** Update File: '
+               '/abs/hooks/bar.py\\n+z\\n*** End Patch";')
+        entries = parse([codex_custom_tool_call("exec", raw)])
+        edits = [c for e in entries for c in tool_calls(e) if c.name == "Edit"]
+        self.assertEqual([c.input["file_path"] for c in edits], ["/abs/hooks/bar.py"])
+
     def test_tool_output_counts_as_successful_result(self):
         entries = parse([codex_custom_tool_call("exec", "x", call_id="call_9"),
                          codex_tool_output(call_id="call_9")])
@@ -149,6 +164,44 @@ class CodexVerifierE2ETest(unittest.TestCase):
                                            "/Users/u/.agents/skills/diagnosing-bugs/SKILL.md\"})"),
         ])
         self.assertEqual(proc.returncode, 0)
+        self.assertEqual(proc.stdout.strip(), "")
+
+
+class CodexToolRuleE2ETest(unittest.TestCase):
+    """tool-based rules (Write|Edit) must fire on Codex via apply_patch synthesis."""
+
+    RULE = {"rules": [{
+        "id": "code-edits-need-guardrails",
+        "when": {"tool": "Write|Edit", "input_pattern": r"\.(go|py|ts)\""},
+        "require": {"skill": "coding-quality-guardrails"},
+    }]}
+
+    def run_verifier(self, entries):
+        d = Path(tempfile.mkdtemp())
+        transcript = d / "rollout.jsonl"
+        transcript.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
+        rules = d / "rules.json"
+        rules.write_text(json.dumps(self.RULE), encoding="utf-8")
+        hook_input = {"transcript_path": str(transcript), "stop_hook_active": False, "cwd": str(d)}
+        return subprocess.run([sys.executable, str(VERIFIER), "--rules", str(rules)],
+                              input=json.dumps(hook_input), capture_output=True, text=True, timeout=30)
+
+    PATCH_CALL = codex_custom_tool_call(
+        "apply_patch", "*** Begin Patch\n*** Update File: hooks/foo.py\n+x\n*** End Patch")
+
+    def test_codex_code_edit_without_skill_blocks(self):
+        proc = self.run_verifier([codex_user_message("고쳐줘"), self.PATCH_CALL])
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("coding-quality-guardrails", verdict["reason"])
+
+    def test_codex_code_edit_with_skill_md_read_passes(self):
+        proc = self.run_verifier([
+            codex_user_message("고쳐줘"), self.PATCH_CALL,
+            codex_custom_tool_call(
+                "exec", "cat ~/.agents/skills/coding-quality-guardrails/SKILL.md",
+                call_id="call_s"),
+        ])
         self.assertEqual(proc.stdout.strip(), "")
 
 
