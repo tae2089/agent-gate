@@ -1,0 +1,20 @@
+{
+  "rules": [
+    {
+      "id": "code-edits-need-guardrails",
+      "when": {
+        "tool": "Write|Edit",
+        "input_pattern": "\\.(go|py|ts|tsx|java|kt)\""
+      },
+      "require": { "skill": "coding-quality-guardrails" },
+      "message": "code was written or edited this turn without the quality gate"
+    },
+    {
+      "id": "debugging-needs-diagnosing-bugs",
+      "when": {
+        "prompt_pattern": "(?i)(디버깅|버그 ?(잡|고쳐|수정)|flaky|regression|root ?cause)"
+      },
+      "require": { "skill": "diagnosing-bugs" }
+    }
+  ]
+}
