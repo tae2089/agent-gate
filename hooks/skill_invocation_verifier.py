@@ -33,11 +33,19 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from transcript import (  # noqa: E402
+    ToolCall,
+    last_prompt_index,
+    note,
+    parse_transcript,
+    prompt_text,
+    read_hook_input,
+    run_fail_open,
+    tool_calls,
+)
 
-@dataclass
-class ToolCall:
-    name: str
-    input: dict
+LABEL = "skill-invocation-verifier"
 
 
 @dataclass
@@ -46,65 +54,14 @@ class Violation:
     guidance: str
 
 
-def _note(msg: str) -> None:
-    print(f"[skill-invocation-verifier] {msg}", file=sys.stderr)
-
-
-def parse_transcript(path: Path) -> list[dict]:
-    entries = []
-    with path.open(encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
-                continue  # partial line from a concurrent append
-            if isinstance(entry, dict):
-                entries.append(entry)
-    return entries
-
-
-def _prompt_text(entry: dict) -> str | None:
-    """Text of a real user prompt; None for tool_result carriers and sidechains."""
-    if entry.get("type") != "user" or entry.get("isSidechain") is True:
-        return None
-    content = (entry.get("message") or {}).get("content")
-    if isinstance(content, str):
-        return content if content.strip() else None
-    if isinstance(content, list):
-        texts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
-        joined = "\n".join(t for t in texts if t)
-        return joined if joined.strip() else None
-    return None
-
-
-def _tool_calls(entry: dict) -> list[ToolCall]:
-    if entry.get("type") != "assistant" or entry.get("isSidechain") is True:
-        return []
-    content = (entry.get("message") or {}).get("content")
-    if not isinstance(content, list):
-        return []
-    calls = []
-    for c in content:
-        if isinstance(c, dict) and c.get("type") == "tool_use" and isinstance(c.get("name"), str):
-            calls.append(ToolCall(name=c["name"], input=c.get("input") or {}))
-    return calls
-
-
 def collect(entries: list[dict]) -> tuple[str | None, list[ToolCall], list[ToolCall]]:
     """Return (last prompt text, current-turn calls, whole-session calls)."""
-    last_prompt_idx = None
-    last_prompt_text = None
-    for i, entry in enumerate(entries):
-        text = _prompt_text(entry)
-        if text is not None:
-            last_prompt_idx, last_prompt_text = i, text
+    last_prompt_idx = last_prompt_index(entries)
+    last_prompt_text = prompt_text(entries[last_prompt_idx]) if last_prompt_idx is not None else None
     session_calls: list[ToolCall] = []
     turn_calls: list[ToolCall] = []
     for i, entry in enumerate(entries):
-        calls = _tool_calls(entry)
+        calls = tool_calls(entry)
         session_calls.extend(calls)
         if last_prompt_idx is not None and i > last_prompt_idx:
             turn_calls.extend(calls)
@@ -113,9 +70,13 @@ def collect(entries: list[dict]) -> tuple[str | None, list[ToolCall], list[ToolC
 
 def _triggered(rule: dict, prompt: str, turn_calls: list[ToolCall]) -> bool:
     when = rule.get("when") or {}
+    if not isinstance(when, dict):
+        raise ValueError("rule 'when' must be an object")
     conditions = {k: when[k] for k in ("prompt_pattern", "tool", "input_pattern") if k in when}
     if not conditions:
         raise ValueError("rule has no when-conditions")
+    if any(not isinstance(pattern, str) for pattern in conditions.values()):
+        raise ValueError("rule patterns must be strings")
     if "prompt_pattern" in conditions and not re.search(conditions["prompt_pattern"], prompt):
         return False
     if "tool" in conditions or "input_pattern" in conditions:
@@ -133,9 +94,15 @@ def _triggered(rule: dict, prompt: str, turn_calls: list[ToolCall]) -> bool:
 
 def _satisfied(rule: dict, session_calls: list[ToolCall]) -> bool:
     require = rule.get("require") or {}
+    if not isinstance(require, dict):
+        raise ValueError("rule 'require' must be an object")
     if "skill" in require:
+        if not isinstance(require["skill"], str):
+            raise ValueError("required skill must be a string")
         return any(c.name == "Skill" and c.input.get("skill") == require["skill"] for c in session_calls)
     if "tool_pattern" in require:
+        if not isinstance(require["tool_pattern"], str):
+            raise ValueError("required tool pattern must be a string")
         return any(re.search(require["tool_pattern"], c.name) for c in session_calls)
     raise ValueError("rule has no require target")
 
@@ -146,14 +113,17 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
         return []
     violations = []
     for rule in rules:
+        if not isinstance(rule, dict):
+            note(LABEL, "skipping non-object rule")
+            continue
         rule_id = str(rule.get("id", "unnamed-rule"))
         try:
             if not _triggered(rule, prompt, turn_calls):
                 continue
             if _satisfied(rule, session_calls):
                 continue
-        except (ValueError, re.error) as exc:
-            _note(f"skipping rule '{rule_id}': {exc}")
+        except (TypeError, ValueError, re.error) as exc:
+            note(LABEL, f"skipping rule '{rule_id}': {exc}")
             continue
         require = rule.get("require") or {}
         if "skill" in require:
@@ -177,35 +147,28 @@ def load_rules(rules_arg: str | None, cwd: str | None) -> list[dict] | None:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            rules = data.get("rules")
+            rules = data.get("rules") if isinstance(data, dict) else None
             if isinstance(rules, list):
                 return rules
-            _note(f"{path}: no 'rules' list")
+            note(LABEL, f"{path}: no 'rules' list")
         except (OSError, json.JSONDecodeError) as exc:
-            _note(f"cannot load rules from {path}: {exc}")
+            note(LABEL, f"cannot load rules from {path}: {exc}")
         return None
     return None
 
 
 def run_hook(rules_arg: str | None) -> int:
-    try:
-        hook_input = json.loads(sys.stdin.read())
-        if not isinstance(hook_input, dict):
-            raise ValueError("hook input is not an object")
-    except (ValueError, json.JSONDecodeError) as exc:
-        _note(f"unreadable hook input, fail-open: {exc}")
+    hook_input = read_hook_input(LABEL)
+    if hook_input is None:
         return 0
-    if hook_input.get("stop_hook_active"):
-        return 0  # already continuing because of a stop hook; never loop
+    return run_fail_open(LABEL, lambda: _run_hook(hook_input, rules_arg))
+
+
+def _run_hook(hook_input: dict, rules_arg: str | None) -> int:
     rules = load_rules(rules_arg, hook_input.get("cwd"))
     if not rules:
         return 0
-    transcript_path = hook_input.get("transcript_path")
-    try:
-        entries = parse_transcript(Path(transcript_path))
-    except (OSError, TypeError) as exc:
-        _note(f"unreadable transcript, fail-open: {exc}")
-        return 0
+    entries = parse_transcript(Path(hook_input.get("transcript_path")))
     violations = evaluate(rules, *collect(entries))
     if not violations:
         return 0

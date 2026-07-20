@@ -11,23 +11,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from transcript_helpers import tool_result, tool_use, user_text
+
 VERIFIER = Path(__file__).resolve().parent.parent / "hooks" / "skill_invocation_verifier.py"
-
-
-def user_text(text, sidechain=False):
-    return {"type": "user", "isSidechain": sidechain, "message": {"role": "user", "content": text}}
-
-
-def tool_use(name, tool_input, sidechain=False):
-    return {
-        "type": "assistant",
-        "isSidechain": sidechain,
-        "message": {"role": "assistant", "content": [{"type": "tool_use", "name": name, "input": tool_input}]},
-    }
-
-
-def tool_result():
-    return {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}}
 
 
 GUARDRAILS_RULE = {
@@ -102,10 +88,13 @@ class TestVerifier(VerifierHarness):
         ])
         self.assert_passed(self.run_hook(self.hook_input()))
 
-    def test_t3_stop_hook_active_never_blocks(self):
+    def test_t3_stop_hook_active_with_missing_skill_still_blocks(self):
         self.write_rules([DEBUG_RULE])
         self.write_transcript([user_text("디버깅 해줘")])
-        self.assert_passed(self.run_hook(self.hook_input(stop_hook_active=True)))
+        self.assert_blocked(
+            self.run_hook(self.hook_input(stop_hook_active=True)),
+            "diagnosing-bugs",
+        )
 
     def test_t4_tool_trigger_missing_skill_blocks(self):
         self.write_rules([GUARDRAILS_RULE])
@@ -169,6 +158,24 @@ class TestVerifier(VerifierHarness):
         self.write_transcript([tool_result()])
         self.assert_passed(self.run_hook(self.hook_input()))
         self.transcript.write_text("", encoding="utf-8")
+        self.assert_passed(self.run_hook(self.hook_input()))
+
+    def test_t11_malformed_rule_shapes_are_skipped(self):
+        malformed = [
+            None,
+            {"id": "bad-when", "when": [], "require": {"skill": "x"}},
+            {"id": "bad-pattern", "when": {"prompt_pattern": []},
+             "require": {"skill": "x"}},
+        ]
+        self.write_rules([*malformed, DEBUG_RULE])
+        self.write_transcript([user_text("디버깅 해줘")])
+        proc = self.run_hook(self.hook_input())
+        self.assert_blocked(proc, "diagnosing-bugs")
+        self.assertNotIn("bad-", proc.stdout)
+
+    def test_t12_non_object_rule_file_fails_open(self):
+        self.rules_path.write_text("[]", encoding="utf-8")
+        self.write_transcript([user_text("디버깅 해줘")])
         self.assert_passed(self.run_hook(self.hook_input()))
 
 

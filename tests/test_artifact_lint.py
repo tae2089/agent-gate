@@ -67,6 +67,18 @@ class TestArtifactLint(unittest.TestCase):
         self.assertTrue(data["passed"])
         self.assertIn("checks", data)
 
+    def test_t6_non_utf8_file_errors_cleanly(self):
+        artifact = self.dir / "handoff.md"
+        artifact.write_bytes(b"\xff\xfe")
+        proc = subprocess.run(
+            [sys.executable, str(LINT), "--type", "handoff", str(artifact)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertIn("cannot read", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

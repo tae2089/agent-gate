@@ -7,28 +7,29 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
+from handoff_state import marker_path  # noqa: E402
+from transcript_helpers import assistant_usage, tool_result, user_text, write_call  # noqa: E402
+
 WATERMARK = Path(__file__).resolve().parent.parent / "hooks" / "context_watermark.py"
 
+GOOD_HANDOFF = """# handoff
 
-def assistant_usage(ctx_tokens):
-    return {
-        "type": "assistant",
-        "message": {
-            "role": "assistant",
-            "content": [{"type": "text", "text": "ok"}],
-            "usage": {"input_tokens": ctx_tokens, "cache_read_input_tokens": 0,
-                      "cache_creation_input_tokens": 0, "output_tokens": 10},
-        },
-    }
+## 목표
+agent-gate의 context watermark 보강
 
+## 완료 작업
+- hooks/context_watermark.py 수정
 
-def write_call(file_path):
-    return {
-        "type": "assistant",
-        "message": {"role": "assistant",
-                    "content": [{"type": "tool_use", "name": "Write",
-                                 "input": {"file_path": file_path, "content": "x"}}]},
-    }
+## 결정
+- 현재 턴의 성공한 Write만 인정
+
+## 검증 상태
+- 회귀 테스트 실행
+
+## 다음 단계
+- 전체 테스트를 실행하고 결과 확인
+"""
 
 
 class TestWatermark(unittest.TestCase):
@@ -47,7 +48,8 @@ class TestWatermark(unittest.TestCase):
         return subprocess.run(args, input=data, capture_output=True, text=True, timeout=30)
 
     def hook_input(self, **over):
-        base = {"transcript_path": str(self.transcript), "stop_hook_active": False, "cwd": str(self.dir)}
+        base = {"transcript_path": str(self.transcript), "stop_hook_active": False,
+                "cwd": str(self.dir), "session_id": "session-1"}
         base.update(over)
         return base
 
@@ -67,17 +69,118 @@ class TestWatermark(unittest.TestCase):
         self.assertIn("92", verdict["reason"])  # 185k/200k = 92.5%
 
     def test_t3_above_threshold_with_handoff_written_passes(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text(GOOD_HANDOFF, encoding="utf-8")
         self.write_transcript([
-            write_call("/proj/_workspace/my-task/handoff.md"),
+            user_text("handoff를 작성해"),
+            write_call(str(handoff)),
+            tool_result(),
             assistant_usage(185_000),
         ])
         proc = self.run_hook(self.hook_input())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        markers = list((self.dir / "_workspace" / ".handoff-sessions").glob("*.json"))
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(json.loads(markers[0].read_text(encoding="utf-8"))["path"], "handoff.md")
+
+    def test_t7_previous_turn_handoff_does_not_satisfy(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text(GOOD_HANDOFF, encoding="utf-8")
+        self.write_transcript([
+            user_text("이전 턴"),
+            write_call(str(handoff)),
+            tool_result(),
+            user_text("새 턴"),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
+
+    def test_t8_failed_write_does_not_satisfy(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text(GOOD_HANDOFF, encoding="utf-8")
+        self.write_transcript([
+            user_text("handoff를 작성해"),
+            write_call(str(handoff)),
+            tool_result(is_error=True),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
+
+    def test_t9_similar_filename_does_not_satisfy(self):
+        wrong = self.dir / "not-a-handoff.txt"
+        wrong.write_text(GOOD_HANDOFF, encoding="utf-8")
+        self.write_transcript([
+            user_text("handoff를 작성해"),
+            write_call(str(wrong)),
+            tool_result(),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
+
+    def test_t10_handoff_outside_project_does_not_satisfy(self):
+        outside = Path(tempfile.mkdtemp()) / "handoff.md"
+        outside.write_text(GOOD_HANDOFF, encoding="utf-8")
+        self.write_transcript([
+            user_text("handoff를 작성해"),
+            write_call(str(outside)),
+            tool_result(),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
+
+    def test_t13_malformed_usage_fails_open(self):
+        self.write_transcript([assistant_usage("not-a-number")])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "")
 
-    def test_t4_stop_hook_active_passes(self):
+    def test_t14_missing_cwd_fails_open(self):
+        self.write_transcript([assistant_usage(185_000)])
+        proc = self.run_hook(self.hook_input(cwd=None))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_t15_non_utf8_handoff_fails_open(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_bytes(b"\xff\xfe")
+        self.write_transcript([
+            user_text("handoff를 작성해"),
+            write_call(str(handoff)),
+            tool_result(),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_t16_session_marker_symlink_is_not_followed(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text(GOOD_HANDOFF, encoding="utf-8")
+        marker = marker_path(self.dir, "session-1")
+        marker.parent.mkdir(parents=True)
+        outside = Path(tempfile.mkdtemp()) / "outside.json"
+        outside.write_text("DO_NOT_OVERWRITE", encoding="utf-8")
+        marker.symlink_to(outside)
+        self.write_transcript([
+            user_text("handoff를 작성해"),
+            write_call(str(handoff)),
+            tool_result(),
+            assistant_usage(185_000),
+        ])
+        proc = self.run_hook(self.hook_input())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(outside.read_text(encoding="utf-8"), "DO_NOT_OVERWRITE")
+
+    def test_t4_stop_hook_active_without_handoff_still_blocks(self):
         self.write_transcript([assistant_usage(185_000)])
         proc = self.run_hook(self.hook_input(stop_hook_active=True))
-        self.assertEqual(proc.stdout.strip(), "")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
 
     def test_t5_no_usage_fail_open(self):
         self.write_transcript([{"type": "user", "message": {"role": "user", "content": "hi"}}])
@@ -96,11 +199,13 @@ if __name__ == "__main__":
 
 
 class TestWatermarkLintIntegration(TestWatermark):
-    def test_t7_empty_shell_handoff_still_blocks_with_lint_reason(self):
+    def test_t11_empty_shell_handoff_still_blocks_with_lint_reason(self):
         handoff = self.dir / "handoff.md"
         handoff.write_text("# handoff\n\n## 목표\nx\n", encoding="utf-8")  # missing floors
         self.write_transcript([
+            user_text("handoff를 작성해"),
             write_call(str(handoff)),
+            tool_result(),
             assistant_usage(185_000),
         ])
         proc = self.run_hook(self.hook_input())
@@ -108,14 +213,13 @@ class TestWatermarkLintIntegration(TestWatermark):
         self.assertEqual(verdict["decision"], "block")
         self.assertIn("failed the structural lint", verdict["reason"])
 
-    def test_t8_good_handoff_on_disk_passes(self):
+    def test_t12_good_handoff_on_disk_passes(self):
         handoff = self.dir / "handoff.md"
-        handoff.write_text(
-            "# handoff\n\n## 목표\nagent-gate 작업 마무리\n\n## 완료 작업\n- scripts/artifact_lint.py 구현\n\n"
-            "## 결정\n- floor 방식 채택, 평균의 함정 방지\n\n## 검증 상태\n- unittest 통과\n\n"
-            "## 다음 단계\n- 커밋하고 README 갱신\n", encoding="utf-8")
+        handoff.write_text(GOOD_HANDOFF, encoding="utf-8")
         self.write_transcript([
+            user_text("handoff를 작성해"),
             write_call(str(handoff)),
+            tool_result(),
             assistant_usage(185_000),
         ])
         proc = self.run_hook(self.hook_input())

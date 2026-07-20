@@ -95,7 +95,7 @@ def lint_file(path: Path, artifact_type: str) -> dict | None:
         return None
     try:
         return lint(path.read_text(encoding="utf-8"), checks)
-    except OSError:
+    except (OSError, UnicodeError):
         return None
 
 
@@ -111,7 +111,7 @@ def main() -> int:
         return 2
     try:
         text = Path(args.file).read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         print(f"cannot read {args.file}: {exc}", file=sys.stderr)
         return 2
     result = lint(text, checks)
