@@ -15,7 +15,11 @@
           {
             "type": "command",
             "command": "python3",
-            "args": ["${CLAUDE_PROJECT_DIR}/hooks/context_watermark.py"]
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/hooks/context_watermark.py",
+              "--window",
+              "1000000"
+            ]
           }
         ]
       }
