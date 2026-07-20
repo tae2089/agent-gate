@@ -109,6 +109,11 @@ class CodexNormalizationTest(unittest.TestCase):
         edits = [c for e in entries for c in tool_calls(e) if c.name == "Edit"]
         self.assertEqual([c.input["file_path"] for c in edits], ["/abs/hooks/bar.py"])
 
+    def test_skill_mdx_does_not_synthesize_skill_call(self):
+        entries = parse([codex_custom_tool_call("exec", "cat docs/some-skill/SKILL.mdx")])
+        skills = [c for e in entries for c in tool_calls(e) if c.name == "Skill"]
+        self.assertEqual(skills, [])
+
     def test_tool_output_counts_as_successful_result(self):
         entries = parse([codex_custom_tool_call("exec", "x", call_id="call_9"),
                          codex_tool_output(call_id="call_9")])

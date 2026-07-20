@@ -47,7 +47,7 @@ def parse_transcript(path: Path) -> list[dict]:
 
 # Codex has no Skill tool; agents apply a skill by shell-reading its SKILL.md,
 # so a "<name>/SKILL.md" path inside a tool input is the invocation record.
-_CODEX_SKILL_RE = re.compile(r"([\w.-]+)/SKILL\.md")
+_CODEX_SKILL_RE = re.compile(r"([\w.-]+)/SKILL\.md\b")
 
 # Codex has no Write tool either (files change via apply_patch/exec), so a
 # handoff path in any tool input becomes a synthetic Write. This is broader
