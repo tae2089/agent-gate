@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from readiness_gate import validate_task_dir  # noqa: E402
 from readiness_state import load_binding, project_relative, record_binding  # noqa: E402
+from transcript import read_hook_input, run_fail_open  # noqa: E402
 
 LABEL = "readiness-gate"
 EDIT_TOOLS = {"write", "edit", "apply_patch"}
@@ -40,10 +41,6 @@ def _tool_name(event: dict[str, Any]) -> str:
     return re.split(r"[.:]", value.lower())[-1]
 
 
-def _tool_input(event: dict[str, Any]) -> Any:
-    return event.get("tool_input")
-
-
 def _patch_strings(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
@@ -57,7 +54,7 @@ def _patch_strings(value: Any) -> list[str]:
 
 def edit_paths(event: dict[str, Any]) -> list[str]:
     """Duck-type Claude/Codex direct paths and free-form apply_patch payloads."""
-    tool_input = _tool_input(event)
+    tool_input = event.get("tool_input")
     paths: list[str] = []
     if isinstance(tool_input, dict):
         for key in ("file_path", "filePath", "path"):
@@ -102,6 +99,10 @@ def _block(reason: str) -> int:
     return 0
 
 
+def _not_ready_reason(result: Any) -> str:
+    return "; ".join(result.errors[:3]) or "assessment is not ready"
+
+
 def _workspace_path(relative: Path) -> bool:
     return bool(relative.parts) and relative.parts[0] == "_workspace"
 
@@ -143,8 +144,7 @@ def run_pre(event: dict[str, Any]) -> int:
 
     result = validate_task_dir(task_dir)
     if not result.ready:
-        details = "; ".join(result.errors[:3]) or "assessment is not ready"
-        return _block(f"bound task is not ready: {details}")
+        return _block(f"bound task is not ready: {_not_ready_reason(result)}")
     return 0
 
 
@@ -185,34 +185,24 @@ def run_bind(event: dict[str, Any]) -> int:
         if result.ready:
             record_binding(root, session_id, task_dir)
             return 0
-        details = "; ".join(result.errors[:3]) or "assessment is not ready"
-        return _block(f"assessment is not ready: {details}")
+        return _block(f"assessment is not ready: {_not_ready_reason(result)}")
     return 0
-
-
-def _read_event(mode: str) -> dict[str, Any] | None:
-    try:
-        value = json.load(sys.stdin)
-        return value if isinstance(value, dict) else None
-    except (UnicodeError, json.JSONDecodeError):
-        if mode == "pre":
-            _block("readiness gate could not parse hook input")
-        return None
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("pre", "bind"), required=True)
     args = parser.parse_args()
-    event = _read_event(args.mode)
+    event = read_hook_input(LABEL)
     if event is None:
-        return 0
+        # pre-edit gate fails CLOSED; the post-edit bind fails open like other hooks.
+        return _block("readiness gate could not parse hook input") if args.mode == "pre" else 0
+    if args.mode == "bind":
+        return run_fail_open(LABEL, lambda: run_bind(event))
     try:
-        return run_pre(event) if args.mode == "pre" else run_bind(event)
+        return run_pre(event)
     except Exception as exc:  # fail closed only on the pre-edit enforcement boundary
-        if args.mode == "pre":
-            return _block(f"readiness gate failed safely: {type(exc).__name__}")
-        return 0
+        return _block(f"readiness gate failed safely: {type(exc).__name__}")
 
 
 if __name__ == "__main__":

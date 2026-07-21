@@ -21,12 +21,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from artifact_lint import lint_file
+from artifact_lint import AC_ID_PATTERN, lint_file
 
 SCHEMA_VERSION = 1
 TASK_AMBIGUITY_MAX = 0.20
 IMPLEMENTATION_READINESS_MIN = 0.80
-AC_PATTERN = re.compile(r"\bAC-\d+\b")
+AC_PATTERN = re.compile(AC_ID_PATTERN)
 
 # name: (weight, minimum score)
 TASK_DIMENSIONS = {
@@ -36,7 +36,8 @@ TASK_DIMENSIONS = {
     "grounding_clarity": (0.15, 0.60),
 }
 
-# AC coverage contributes the remaining 0.35.
+# The three dimensions below sum to 0.65; AC coverage contributes the rest.
+AC_COVERAGE_WEIGHT = 0.35
 IMPLEMENTATION_DIMENSIONS = {
     "decision_closure": 0.30,
     "change_specificity": 0.20,
@@ -225,7 +226,7 @@ def validate_task_dir(task_dir: Path | str) -> ValidationResult:
 
     implementation_readiness = None
     if len(implementation_scores) == len(IMPLEMENTATION_DIMENSIONS):
-        implementation_readiness = 0.35 * coverage + sum(
+        implementation_readiness = AC_COVERAGE_WEIGHT * coverage + sum(
             implementation_scores[name] * weight
             for name, weight in IMPLEMENTATION_DIMENSIONS.items()
         )

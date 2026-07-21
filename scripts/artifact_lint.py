@@ -37,6 +37,8 @@ class Check:
 
 
 FILE_PATH_PATTERN = r"[\w./-]+\.(md|py|go|ts|tsx|java|kt|json|yaml|yml|sh|toml)\b"
+# Stable acceptance-criterion id; shared with scripts/readiness_gate.py.
+AC_ID_PATTERN = r"\bAC-\d+\b"
 
 HANDOFF_CHECKS = [
     Check("goal", 0.15, False, "goal section", ["목표", "goal"]),
@@ -69,7 +71,7 @@ TASK_CHECKS = [
     Check("implementation", 0.15, True, "implementation checklist section", ["구현", "implementation"]),
     Check("verification", 0.15, True, "verification checklist section", ["검증", "verification"]),
     Check("acceptance_ids", 0.25, True, "at least one stable AC-number identifier",
-          pattern=r"\bAC-\d+\b"),
+          pattern=AC_ID_PATTERN),
 ]
 
 _WALKTHROUGH_ENTRY = r"^\[[^\]]*\]\s*(decision|error|verification)\s*:"
