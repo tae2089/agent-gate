@@ -54,7 +54,10 @@ HANDOFF_CHECKS = [
 ]
 
 # implementation.md is flat bullets by convention, so these are whole-document
-# keyword checks rather than section checks.
+# keyword checks rather than section checks. The flowchart convention (include a
+# mermaid diagram when the logic is non-trivial) is intentionally NOT a lint
+# check — warrant can't be judged deterministically; it lives in
+# docs/rubric-judge.md and is scored by the tier-2 judge.
 IMPLEMENTATION_CHECKS = [
     Check("approach", 0.25, False, "design approach stated",
           pattern=r"설계|접근|구조|방식|위치|(?i:approach|design|architecture)"),

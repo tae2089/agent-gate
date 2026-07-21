@@ -49,7 +49,13 @@ ARTIFACT>>>
 | review brief (ready-code-review) | 대상 diff + 저장소의 실제 불변식 (코드) |
 | handoff.md | 세션에서 실제 수행된 작업 (git log, 변경 파일) |
 | task.md / spec | 사용자 요청 원문 + 관련 코드 |
+| implementation.md | 대상 diff/코드 + task.md의 계약 |
 | dispatch plan | 원 목표 + 각 유닛의 실제 파일 범위 |
+
+## implementation.md: flowchart 컨벤션
+
+- **컨벤션(작성자)**: 로직이 **비자명**하면 — flow-design 임계 기준으로 non-validation 분기 ≥ 3개 **또는** 부수효과(WRITE/외부 CALL/PUBLISH) ≥ 2개 — implementation.md에 mermaid flowchart를 포함한다. 자명한 변경(설정·한 파일·기계적 수정)엔 넣지 않는다. 다이어그램이 필요할 만큼 복잡하면 오히려 flow-design 스킬을 써서 그리는 게 낫다.
+- **tier-2 판정 반영**: implementation.md를 채점할 때, 위 임계를 넘는 비자명 로직인데 flowchart가 없으면 **actionability 감점 근거**로 삼는다(다음 사람이 분기·흐름을 텍스트만으로 재구성해야 함). 자명한 변경에서 flowchart 부재는 감점 대상 아님 — 필요 없는데 그린 ceremony는 오히려 actionability에 무관하거나 소폭 감점. 이 판단은 결정론 lint가 아니라 판정자 몫이다(warrant를 코드가 못 잼).
 
 ## 한계 (정직하게)
 
