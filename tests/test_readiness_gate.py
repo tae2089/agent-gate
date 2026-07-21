@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from readiness_helpers import IMPLEMENTATION, TASK, assessment_for, digest, write_artifacts
+from readiness_helpers import IMPLEMENTATION, assessment_for, digest, write_artifacts
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "readiness_gate.py"

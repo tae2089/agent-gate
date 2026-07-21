@@ -171,8 +171,8 @@ class TestImplementationProfile(unittest.TestCase):
         self.assertTrue(data["passed"], data)
 
     def test_i2_missing_risks_fails_floor(self):
-        content = "\n".join(l for l in GOOD_IMPLEMENTATION.splitlines()
-                            if "위험" not in l and "엣지" not in l)
+        content = "\n".join(line for line in GOOD_IMPLEMENTATION.splitlines()
+                            if "위험" not in line and "엣지" not in line)
         data = json.loads(self.lint(content).stdout)
         self.assertFalse(data["passed"])
         self.assertIn("risks", data["floor_failures"])
@@ -213,8 +213,8 @@ class TestWalkthroughProfile(unittest.TestCase):
         self.assertTrue(data["passed"], data)
 
     def test_w2_no_verification_entry_fails_floor(self):
-        content = "\n".join(l for l in GOOD_WALKTHROUGH.splitlines()
-                            if "verification" not in l)
+        content = "\n".join(line for line in GOOD_WALKTHROUGH.splitlines()
+                            if "verification" not in line)
         data = json.loads(self.lint(content).stdout)
         self.assertFalse(data["passed"])
         self.assertIn("verifications", data["floor_failures"])
