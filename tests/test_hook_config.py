@@ -40,6 +40,25 @@ class TestHookConfig(unittest.TestCase):
             self.assertNotIn("/Users/", command)
             self.assertIn("$(git rev-parse --show-toplevel)", command)
 
+    def test_claude_wires_readiness_precheck_and_post_bind(self):
+        config = self.load(".claude/settings.json")
+        pre = config["hooks"]["PreToolUse"]
+        post = config["hooks"]["PostToolUse"]
+        self.assertEqual(pre[0]["matcher"], "Write|Edit|apply_patch")
+        self.assertEqual(post[0]["matcher"], "Write|Edit|apply_patch")
+        self.assertEqual(pre[0]["hooks"][0]["args"][-2:], ["--mode", "pre"])
+        self.assertEqual(post[0]["hooks"][0]["args"][-2:], ["--mode", "bind"])
+
+    def test_codex_wires_readiness_precheck_and_post_bind(self):
+        config = self.load(".codex/hooks.json")
+        pre = config["hooks"]["PreToolUse"]
+        post = config["hooks"]["PostToolUse"]
+        self.assertEqual(pre[0]["matcher"], "Write|Edit|apply_patch")
+        self.assertEqual(post[0]["matcher"], "Write|Edit|apply_patch")
+        self.assertIn("readiness_gate_hook.py", pre[0]["hooks"][0]["command"])
+        self.assertIn("--mode pre", pre[0]["hooks"][0]["command"])
+        self.assertIn("--mode bind", post[0]["hooks"][0]["command"])
+
 
 if __name__ == "__main__":
     unittest.main()
