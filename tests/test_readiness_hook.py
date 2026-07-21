@@ -1,17 +1,23 @@
 """Contract tests for session-bound pre-edit readiness hooks."""
 
 import hashlib
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from readiness_helpers import assessment_for, write_artifacts
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / "hooks" / "readiness_gate_hook.py"
+sys.path.insert(0, str(ROOT / "hooks"))
+sys.path.insert(0, str(ROOT / "scripts"))
+import readiness_gate_hook as gate_hook  # noqa: E402
 
 
 def marker_path(root: Path, session_id: str) -> Path:
@@ -94,14 +100,112 @@ class TestPreEditGate(ReadinessHookHarness):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(proc.stdout.strip(), "")
 
+    def test_unbound_non_document_edits_are_guarded_by_default(self):
+        protected = (
+            "Makefile",
+            "Dockerfile",
+            "infra/main.tf",
+            "schema/query.sql",
+            "api/service.proto",
+            "build.gradle",
+            ".gitignore",
+        )
+        for relative in protected:
+            with self.subTest(relative=relative):
+                proc = self.run_hook("pre", self.event(self.project / relative))
+                self.assert_blocked(proc, "no readiness task is bound")
+
+    def test_explicit_project_document_exemptions_are_allowed(self):
+        documents = (
+            "README.md",
+            "guide.rst",
+            "notes.txt",
+            "README",
+            "LICENSE",
+            "NOTICE",
+            "AUTHORS",
+            "CONTRIBUTORS",
+            "CHANGELOG",
+            "CONTRIBUTING",
+            "CODE_OF_CONDUCT",
+        )
+        for relative in documents:
+            with self.subTest(relative=relative):
+                proc = self.run_hook("pre", self.event(self.project / relative))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual(proc.stdout.strip(), "")
+
+    def test_document_target_outside_project_is_blocked(self):
+        outside = Path(tempfile.mkdtemp()) / "README.md"
+        proc = self.run_hook("pre", self.event(outside))
+        self.assert_blocked(proc, "outside the project")
+
+    def test_mixed_patch_with_a_protected_target_is_blocked(self):
+        event = {
+            "session_id": "session-1",
+            "cwd": str(self.project),
+            "tool_name": "apply_patch",
+            "tool_input": {
+                "command": (
+                    "*** Begin Patch\n"
+                    "*** Update File: README.md\n"
+                    "*** Update File: Makefile\n"
+                    "*** End Patch"
+                )
+            },
+        }
+        proc = self.run_hook("pre", event)
+        self.assert_blocked(proc, "no readiness task is bound")
+
     def test_guarded_path_outside_project_is_blocked(self):
         outside = Path(tempfile.mkdtemp()) / "outside.py"
         proc = self.run_hook("pre", self.event(outside))
         self.assert_blocked(proc, "outside the project")
 
-    def test_edit_tool_without_a_target_is_fail_closed(self):
+    def test_edit_tool_without_a_target_fails_open_with_diagnostic(self):
         proc = self.run_hook("pre", self.event(tool_name="Edit", tool_input={}))
-        self.assert_blocked(proc, "could not determine")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        self.assertIn("fail-open", proc.stderr)
+
+    def test_malformed_hook_input_fails_open_with_diagnostic(self):
+        proc = subprocess.run(
+            [sys.executable, str(HOOK), "--mode", "pre"],
+            input="not json {",
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        self.assertIn("fail-open", proc.stderr)
+
+    def test_non_object_hook_input_fails_open_with_diagnostic(self):
+        proc = self.run_hook("pre", [])
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        self.assertIn("fail-open", proc.stderr)
+
+    def test_missing_project_root_fails_open_with_diagnostic(self):
+        event = self.event(self.project / "src" / "app.py")
+        event.pop("cwd")
+        proc = self.run_hook("pre", event)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        self.assertIn("fail-open", proc.stderr)
+
+    def test_internal_failure_after_protected_target_is_fail_closed(self):
+        output = io.StringIO()
+        with patch.object(gate_hook, "load_binding", side_effect=RuntimeError("boom")):
+            with redirect_stdout(output):
+                return_code = gate_hook.run_pre(
+                    self.event(self.project / "src" / "app.py")
+                )
+
+        self.assertEqual(return_code, 0)
+        verdict = json.loads(output.getvalue())
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("failed safely", verdict["reason"])
 
     def test_codex_apply_patch_command_payload_is_normalized(self):
         self.bind_ready()

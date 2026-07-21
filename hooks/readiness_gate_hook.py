@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Bind validated task readiness and guard direct source-code edits.
+"""Bind validated task readiness and guard direct project edits.
 
 ``--mode bind`` is a PostToolUse hook for assessment writes. ``--mode pre``
-is a PreToolUse hook that blocks guarded source edits unless the current
+is a PreToolUse hook that blocks guarded project edits unless the current
 session's bound task remains ready.
 """
 
@@ -20,16 +20,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from readiness_gate import validate_task_dir  # noqa: E402
 from readiness_state import load_binding, project_relative, record_binding  # noqa: E402
-from transcript import read_hook_input, run_fail_open  # noqa: E402
+from transcript import note, read_hook_input, run_fail_open  # noqa: E402
 
 LABEL = "readiness-gate"
 EDIT_TOOLS = {"write", "edit", "apply_patch"}
-GUARDED_SUFFIXES = {
-    ".bash", ".c", ".cc", ".cpp", ".cs", ".cxx", ".dart", ".ex", ".exs",
-    ".fish", ".fs", ".fsx", ".go", ".h", ".hpp", ".hrl", ".java", ".js",
-    ".jsx", ".kt", ".kts", ".lua", ".m", ".mjs", ".mm", ".php", ".ps1",
-    ".py", ".pyi", ".rb", ".rs", ".scala", ".sh", ".swift", ".svelte",
-    ".ts", ".tsx", ".vue", ".zsh",
+UNGUARDED_SUFFIXES = {".md", ".rst", ".txt"}
+UNGUARDED_FILENAMES = {
+    "authors",
+    "changelog",
+    "code_of_conduct",
+    "contributors",
+    "contributing",
+    "license",
+    "notice",
+    "readme",
 }
 _PATCH_PATH = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
 
@@ -107,45 +111,58 @@ def _workspace_path(relative: Path) -> bool:
     return bool(relative.parts) and relative.parts[0] == "_workspace"
 
 
+def _unguarded_document(relative: Path) -> bool:
+    return (
+        relative.suffix.lower() in UNGUARDED_SUFFIXES
+        or relative.name.lower() in UNGUARDED_FILENAMES
+    )
+
+
+def _enforce_guarded_edit(root: Path, event: dict[str, Any]) -> int:
+    """Fail closed after target classification establishes protected scope."""
+    try:
+        state, task_dir = load_binding(root, _session_id(event))
+        if state == "absent":
+            return _block(
+                "no readiness task is bound to this session; write and validate "
+                "_workspace/<task>/assessment.json with the artifact-judge readiness "
+                "procedure before editing protected project files"
+            )
+        if state != "bound" or task_dir is None:
+            return _block("unsafe readiness session marker; remove or repair the local marker")
+
+        result = validate_task_dir(task_dir)
+        if not result.ready:
+            return _block(f"bound task is not ready: {_not_ready_reason(result)}")
+        return 0
+    except Exception as exc:
+        return _block(f"readiness gate failed safely: {type(exc).__name__}")
+
+
 def run_pre(event: dict[str, Any]) -> int:
     if _tool_name(event) not in EDIT_TOOLS:
         return 0
     paths = edit_paths(event)
     if not paths:
-        return _block("readiness gate could not determine the direct edit target")
+        note(LABEL, "direct edit target is unavailable, fail-open")
+        return 0
 
     root = _project_root(event)
     if root is None:
-        return _block("readiness gate could not resolve the project directory")
+        note(LABEL, "project directory is unavailable, fail-open")
+        return 0
 
     guarded: list[Path] = []
     for raw_path in paths:
-        suffix = Path(raw_path).suffix.lower()
         relative = project_relative(root, raw_path)
-        if relative is not None and _workspace_path(relative):
-            continue
-        if suffix not in GUARDED_SUFFIXES:
-            continue
         if relative is None:
             return _block(f"guarded edit target is outside the project or unsafe: {raw_path}")
+        if _workspace_path(relative) or _unguarded_document(relative):
+            continue
         guarded.append(relative)
     if not guarded:
         return 0
-
-    state, task_dir = load_binding(root, _session_id(event))
-    if state == "absent":
-        return _block(
-            "no readiness task is bound to this session; write and validate "
-            "_workspace/<task>/assessment.json with the artifact-judge readiness "
-            "procedure before editing source"
-        )
-    if state != "bound" or task_dir is None:
-        return _block("unsafe readiness session marker; remove or repair the local marker")
-
-    result = validate_task_dir(task_dir)
-    if not result.ready:
-        return _block(f"bound task is not ready: {_not_ready_reason(result)}")
-    return 0
+    return _enforce_guarded_edit(root, event)
 
 
 def _assessment_task(root: Path, raw_path: str) -> Path | None:
@@ -195,14 +212,10 @@ def main() -> int:
     args = parser.parse_args()
     event = read_hook_input(LABEL)
     if event is None:
-        # pre-edit gate fails CLOSED; the post-edit bind fails open like other hooks.
-        return _block("readiness gate could not parse hook input") if args.mode == "pre" else 0
+        return 0
     if args.mode == "bind":
         return run_fail_open(LABEL, lambda: run_bind(event))
-    try:
-        return run_pre(event)
-    except Exception as exc:  # fail closed only on the pre-edit enforcement boundary
-        return _block(f"readiness gate failed safely: {type(exc).__name__}")
+    return run_fail_open(LABEL, lambda: run_pre(event))
 
 
 if __name__ == "__main__":

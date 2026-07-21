@@ -7,10 +7,11 @@ root, or `_workspace/<task>/handoff.md`.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Iterator
 from pathlib import Path
+
+from session_marker import marker_path as session_marker_path
+from session_marker import read_marker, write_marker
 
 MARKER_DIR = ".handoff-sessions"
 HANDOFF_NAME = "handoff.md"
@@ -54,35 +55,7 @@ def resolve_handoff(root: Path, raw_path: str | Path) -> Path | None:
 
 def marker_path(root: Path, session_id: str) -> Path:
     """Marker file location for a session id (pure computation, no checks)."""
-    digest = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
-    return root / "_workspace" / MARKER_DIR / f"{digest}.json"
-
-
-def _marker_path(root: Path, session_id: str, *, create: bool) -> tuple[str, Path | None]:
-    """Validate the marker location for an already-resolved root.
-
-    Returns (state, path): "valid" — an existing regular marker file;
-    "absent" — usable location but no marker yet (path set when writable);
-    "suspicious" — symlinks or non-regular files where none belong.
-    """
-    if not isinstance(session_id, str) or not session_id:
-        return "absent", None
-    workspace = root / "_workspace"
-    marker_dir = workspace / MARKER_DIR
-    if workspace.is_symlink() or marker_dir.is_symlink():
-        return "suspicious", None
-    if create:
-        marker_dir.mkdir(parents=True, exist_ok=True)
-    if not marker_dir.is_dir():
-        return "absent", None
-    marker = marker_path(root, session_id)
-    if marker.is_symlink():
-        return "suspicious", None
-    if not marker.exists():
-        return "absent", marker
-    if not marker.is_file():
-        return "suspicious", None
-    return "valid", marker
+    return session_marker_path(root, MARKER_DIR, session_id)
 
 
 def record_session_handoff(cwd: Path, session_id: str, handoff: Path) -> bool:
@@ -92,12 +65,10 @@ def record_session_handoff(cwd: Path, session_id: str, handoff: Path) -> bool:
     """
     try:
         root = cwd.resolve(strict=True)
-        state, marker = _marker_path(root, session_id, create=True)
-        if state == "suspicious" or marker is None:
-            return False
         relative = handoff.relative_to(root)
-        marker.write_text(json.dumps({"path": relative.as_posix()}), encoding="utf-8")
-        return True
+        return write_marker(
+            root, MARKER_DIR, session_id, {"path": relative.as_posix()}
+        )
     except (OSError, RuntimeError, ValueError):
         return False
 
@@ -106,15 +77,14 @@ def load_session_handoff(cwd: Path, session_id: str) -> tuple[bool, Path | None]
     """Return (marker exists, verified handoff) for a Claude session."""
     try:
         root = cwd.resolve(strict=True)
-        state, marker = _marker_path(root, session_id, create=False)
-        if state == "suspicious":
+        state, data = read_marker(root, MARKER_DIR, session_id)
+        if state == "unsafe":
             return True, None
         if state == "absent":
             return False, None
-        data = json.loads(marker.read_text(encoding="utf-8"))
-        raw_path = data.get("path") if isinstance(data, dict) else None
+        raw_path = data.get("path") if data is not None else None
         if not isinstance(raw_path, str):
             return True, None
         return True, resolve_handoff(root, raw_path)
-    except (OSError, RuntimeError, TypeError, ValueError, UnicodeError, json.JSONDecodeError):
+    except (OSError, RuntimeError, TypeError, ValueError):
         return True, None

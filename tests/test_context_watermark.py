@@ -6,9 +6,10 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from handoff_state import marker_path  # noqa: E402
+from handoff_state import marker_path, record_session_handoff  # noqa: E402
 from transcript_helpers import assistant_usage, tool_result, user_text, write_call  # noqa: E402
 
 WATERMARK = Path(__file__).resolve().parent.parent / "hooks" / "context_watermark.py"
@@ -210,6 +211,31 @@ class TestWatermark(WatermarkHarness):
         self.write_transcript([assistant_usage(190_000)])
         reason = json.loads(self.run_hook(self.hook_input()).stdout)["reason"]
         self.assertRegex(reason, r"(verbatim|원문|그대로|quote)")
+
+    def test_t19_marker_replace_failure_preserves_previous_handoff(self):
+        original = self.dir / "_workspace" / "original" / "handoff.md"
+        replacement = self.dir / "_workspace" / "replacement" / "handoff.md"
+        original.parent.mkdir(parents=True)
+        replacement.parent.mkdir(parents=True)
+        original.write_text(GOOD_HANDOFF, encoding="utf-8")
+        replacement.write_text(GOOD_HANDOFF, encoding="utf-8")
+        marker = marker_path(self.dir, "session-1")
+        marker.parent.mkdir(parents=True)
+        marker.write_text(
+            json.dumps({"path": original.relative_to(self.dir).as_posix()}),
+            encoding="utf-8",
+        )
+
+        with patch("session_marker.os.replace", side_effect=OSError("replace failed")):
+            self.assertFalse(
+                record_session_handoff(self.dir, "session-1", replacement.resolve())
+            )
+
+        self.assertEqual(
+            json.loads(marker.read_text(encoding="utf-8")),
+            {"path": "_workspace/original/handoff.md"},
+        )
+        self.assertEqual(list(marker.parent.glob(".session-marker-*.tmp")), [])
 
 
 if __name__ == "__main__":
