@@ -90,6 +90,29 @@ TYPES = {
     "walkthrough": WALKTHROUGH_CHECKS,
 }
 
+# High-signal phrases that try to steer a judge reading this artifact, rather
+# than describe the work. Deterministic pre-screen for the tier-2 judge — a
+# match is surfaced, not auto-scored (JudgeDeceiver, CCS 2024). Curated tight
+# to limit false positives on artifacts that merely discuss approval.
+INJECTION_PATTERNS = [
+    r"(?i)ignore\s+(all\s+|the\s+)?(previous|prior|above)\s+instructions?",
+    r"(?i)disregard\s+(the\s+)?(above|previous|prior)",
+    r"이전.{0,8}지시.{0,10}(무시|무효|잊)",
+    r"(?i)(you\s+are|act\s+as)\s+(the\s+|an?\s+)?(judge|evaluator|grader)",
+    r"(?i)(assign|give|output|return)\s+[^\n]{0,24}"
+    r"(1\.0|100%|full\s+marks|highest\s+score|max(?:imum)?\s+score)",
+    r"(만점|최고점|최고 ?점수)(으로|을|를)?\s*(평가|채점|줘|주세요|매겨)",
+    r"(?i)verdict\s*[:=]\s*(approve|pass)",
+]
+
+
+def scan_injection(text: str) -> list[str]:
+    """Verbatim spans matching a judge-directed injection pattern."""
+    found = []
+    for pattern in INJECTION_PATTERNS:
+        found.extend(m.group(0).strip() for m in re.finditer(pattern, text))
+    return found
+
 
 def _sections(text: str) -> list[tuple[str, str]]:
     """(heading, body) pairs from markdown headings; body is text until next heading."""
@@ -153,12 +176,34 @@ def lint_file(path: Path, artifact_type: str) -> dict | None:
         return None
 
 
+def _run_injection_scan(path: str) -> int:
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        print(f"cannot read {path}: {exc}", file=sys.stderr)
+        return 2
+    findings = scan_injection(text)
+    if not findings:
+        return 0
+    print(f"SUSPICIOUS: {len(findings)} judge-directed instruction(s) found:")
+    for span in findings:
+        print(f"  {span!r}")
+    return 3
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--type", required=True, help=f"artifact type ({', '.join(sorted(TYPES))})")
+    parser.add_argument("--type", help=f"artifact type ({', '.join(sorted(TYPES))})")
+    parser.add_argument("--injection-scan", action="store_true",
+                        help="scan for judge-directed injection instead of structural lint")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("file")
     args = parser.parse_args()
+    if args.injection_scan:
+        return _run_injection_scan(args.file)
+    if not args.type:
+        print("--type is required unless --injection-scan is given", file=sys.stderr)
+        return 2
     checks = TYPES.get(args.type)
     if checks is None:
         print(f"unknown artifact type: {args.type} (known: {', '.join(sorted(TYPES))})", file=sys.stderr)
