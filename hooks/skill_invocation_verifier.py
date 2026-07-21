@@ -16,6 +16,7 @@ Rule file schema (JSON):
         "id": "code-edits-need-guardrails",
         "when": {"prompt_pattern": "...", "tool": "Write|Edit", "input_pattern": "\\.go"},
         "require": {"skill": "coding-quality-guardrails"},   # or {"tool_pattern": "^mcp__context7__"}
+                                                             # or {"test_report": "reports/junit.xml"}
         "message": "optional extra guidance"
     }]}
 
@@ -92,7 +93,7 @@ def _triggered(rule: dict, prompt: str, turn_calls: list[ToolCall]) -> bool:
     return True
 
 
-def _satisfied(rule: dict, session_calls: list[ToolCall]) -> bool:
+def _satisfied(rule: dict, session_calls: list[ToolCall], cwd: str | None) -> bool:
     require = rule.get("require") or {}
     if not isinstance(require, dict):
         raise ValueError("rule 'require' must be an object")
@@ -104,11 +105,60 @@ def _satisfied(rule: dict, session_calls: list[ToolCall]) -> bool:
         if not isinstance(require["tool_pattern"], str):
             raise ValueError("required tool pattern must be a string")
         return any(re.search(require["tool_pattern"], c.name) for c in session_calls)
+    if "test_report" in require:
+        spec = require["test_report"]
+        if not isinstance(spec, str):
+            raise ValueError("required test_report must be a path string")
+        if cwd is None:
+            return True  # audit without cwd cannot read the report; do not flag
+        return _test_report_passing(Path(cwd), spec)
     raise ValueError("rule has no require target")
 
 
+def _test_report_passing(cwd: Path, spec: str) -> bool:
+    """A deterministic external reporter artifact (JUnit XML or JSON) that
+    records zero failures. Missing/unreadable/failing all count as not-passing,
+    so the rule blocks until a green report exists (arXiv/tdd-guard pattern)."""
+    matches = sorted(cwd.glob(spec)) if any(ch in spec for ch in "*?[") else [cwd / spec]
+    saw_report = False
+    for path in matches:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            continue
+        verdict = _report_verdict(text)
+        if verdict is None:
+            continue
+        saw_report = True
+        if not verdict:
+            return False
+    return saw_report
+
+
+def _report_verdict(text: str) -> bool | None:
+    """True=green, False=has failures, None=not a recognized report."""
+    stripped = text.lstrip()
+    if stripped.startswith("{"):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        summary = data.get("summary") if isinstance(data.get("summary"), dict) else data
+        if not isinstance(summary, dict):
+            return None
+        failed = summary.get("failed", summary.get("failures"))
+        errored = summary.get("errors", 0)
+        if failed is None:
+            return None
+        return int(failed) == 0 and int(errored or 0) == 0
+    counts = re.findall(r'(failures|errors)="(\d+)"', text)
+    if not counts:
+        return None
+    return all(int(n) == 0 for _, n in counts)
+
+
 def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
-             session_calls: list[ToolCall]) -> list[Violation]:
+             session_calls: list[ToolCall], cwd: str | None = None) -> list[Violation]:
     if prompt is None:
         return []
     violations = []
@@ -120,7 +170,7 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
         try:
             if not _triggered(rule, prompt, turn_calls):
                 continue
-            if _satisfied(rule, session_calls):
+            if _satisfied(rule, session_calls, cwd):
                 continue
         except (TypeError, ValueError, re.error) as exc:
             note(LABEL, f"skipping rule '{rule_id}': {exc}")
@@ -128,6 +178,8 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
         require = rule.get("require") or {}
         if "skill" in require:
             guidance = f"invoke Skill({require['skill']})"
+        elif "test_report" in require:
+            guidance = f"make all tests pass and write the report to {require['test_report']!r}"
         else:
             guidance = f"call a tool matching {require['tool_pattern']!r}"
         if rule.get("message"):
@@ -169,7 +221,7 @@ def _run_hook(hook_input: dict, rules_arg: str | None) -> int:
     if not rules:
         return 0
     entries = parse_transcript(Path(hook_input.get("transcript_path")))
-    violations = evaluate(rules, *collect(entries))
+    violations = evaluate(rules, *collect(entries), cwd=hook_input.get("cwd"))
     if not violations:
         return 0
     lines = [f"rule '{v.rule_id}': {v.guidance}" for v in violations]

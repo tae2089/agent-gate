@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from transcript_helpers import tool_result, tool_use, user_text
+from transcript_helpers import tool_result, tool_use, user_text, write_call
 
 VERIFIER = Path(__file__).resolve().parent.parent / "hooks" / "skill_invocation_verifier.py"
 
@@ -30,6 +30,11 @@ CONTEXT7_RULE = {
     "id": "library-docs-need-context7",
     "when": {"prompt_pattern": r"(?i)library docs"},
     "require": {"tool_pattern": r"^mcp__context7__"},
+}
+TEST_REPORT_RULE = {
+    "id": "code-edit-needs-green-tests",
+    "when": {"tool": "Write|Edit", "input_pattern": r"\.py"},
+    "require": {"test_report": "junit.xml"},
 }
 
 
@@ -93,6 +98,36 @@ class TestVerifier(VerifierHarness):
             user_text("계속 디버깅 해줘"),
             tool_use("Read", {"file_path": "/x/main.go"}),
         ])
+        self.assert_passed(self.run_hook(self.hook_input()))
+
+    def test_b11_passing_junit_report_satisfies(self):
+        self.write_rules([TEST_REPORT_RULE])
+        (self.dir / "junit.xml").write_text(
+            '<testsuite tests="3" failures="0" errors="0"></testsuite>', encoding="utf-8")
+        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
+                               write_call("app.py")])
+        self.assert_passed(self.run_hook(self.hook_input()))
+
+    def test_b11_failing_junit_report_blocks(self):
+        self.write_rules([TEST_REPORT_RULE])
+        (self.dir / "junit.xml").write_text(
+            '<testsuite tests="3" failures="1" errors="0"></testsuite>', encoding="utf-8")
+        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
+                               write_call("app.py")])
+        self.assert_blocked(self.run_hook(self.hook_input()), "junit.xml")
+
+    def test_b11_missing_report_blocks(self):
+        self.write_rules([TEST_REPORT_RULE])
+        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
+                               write_call("app.py")])
+        self.assert_blocked(self.run_hook(self.hook_input()), "junit.xml")
+
+    def test_b11_passing_json_report_satisfies(self):
+        self.write_rules([TEST_REPORT_RULE])
+        (self.dir / "junit.xml").write_text(
+            '{"summary": {"passed": 5, "failed": 0}}', encoding="utf-8")
+        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
+                               write_call("app.py")])
         self.assert_passed(self.run_hook(self.hook_input()))
 
     def test_t3_stop_hook_active_with_missing_skill_still_blocks(self):
