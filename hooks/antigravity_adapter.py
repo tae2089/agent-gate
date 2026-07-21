@@ -20,9 +20,13 @@ Antigravity coverage (measured against transcript_full.jsonl, codex-cli-style):
   reads skill use from a view_file with args.IsSkillFile.
 - reinject: supported via PreInvocation — see antigravity_reinject.py, which
   injects the handoff once per CHECKPOINT (compaction) using injectSteps.
-- watermark (Stop): unsupported — Antigravity records no token/usage anywhere
-  in the transcript or hook stdin, so context size cannot be computed, and the
-  invocation hooks cannot block; left unwired.
+- watermark (Stop): unsupported. Verified across every Antigravity CLI store:
+  the brain transcript (transcriptPath) and the conversations/*.db|*.pb carry
+  no token counts, and the only real-token file (~/.gemini/tmp/<slug>/chats/
+  *.json, tokens{input,output,cached,total}) is written by the IDE, not the
+  CLI. A chars/4 estimate is the only reachable signal, and gating on an
+  estimate would make a deterministic gate probabilistic — so it is left
+  unwired. Reinject already covers Antigravity's context-loss recovery.
 """
 
 from __future__ import annotations
