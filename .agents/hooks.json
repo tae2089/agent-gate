@@ -1,5 +1,11 @@
 {
   "agent-gate": {
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/antigravity_reinject.py\""
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "write_to_file",

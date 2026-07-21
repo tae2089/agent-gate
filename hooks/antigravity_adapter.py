@@ -18,10 +18,11 @@ Antigravity coverage (measured against transcript_full.jsonl, codex-cli-style):
 - readiness (Pre/PostToolUse): supported — the tool call is normalized here.
 - verifier (Stop): supported — transcript.py normalizes Antigravity lines and
   reads skill use from a view_file with args.IsSkillFile.
-- watermark (Stop): unsupported — Antigravity records no token/usage in the
-  transcript, so context size cannot be computed; left unwired.
-- reinject (SessionStart): unsupported — Antigravity command hooks have no
-  session-start event.
+- reinject: supported via PreInvocation — see antigravity_reinject.py, which
+  injects the handoff once per CHECKPOINT (compaction) using injectSteps.
+- watermark (Stop): unsupported — Antigravity records no token/usage anywhere
+  in the transcript or hook stdin, so context size cannot be computed, and the
+  invocation hooks cannot block; left unwired.
 """
 
 from __future__ import annotations
