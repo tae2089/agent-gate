@@ -197,6 +197,28 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
     return violations
 
 
+def routed_skill_hints(rules: list[dict], prompt: str) -> list[tuple[str, str]]:
+    """(rule_id, skill) for skill-requiring rules that the prompt alone already
+    triggers. Tool-gated rules are excluded — no tool calls exist yet at
+    prompt-submit time. Used by the proactive UserPromptSubmit router."""
+    hints = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        rule_id = str(rule.get("id", "unnamed-rule"))
+        try:
+            if not _triggered(rule, prompt, []):
+                continue
+        except (TypeError, ValueError, re.error) as exc:
+            note(LABEL, f"skipping rule '{rule_id}': {exc}")
+            continue
+        require = rule.get("require") or {}
+        skill = require.get("skill") if isinstance(require, dict) else None
+        if isinstance(skill, str):
+            hints.append((rule_id, skill))
+    return hints
+
+
 def evaluate_transcript(rules: list[dict], entries: list[dict], cwd: str | None = None) -> list[Violation]:
     """Single composition of the verifier pipeline, shared by the hook, the
     audit --check mode, and the replay harness so all three run the same path."""
