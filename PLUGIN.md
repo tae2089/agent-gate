@@ -78,6 +78,29 @@ to every project you install the plugin into.
 - If you also want per-project rules on top of the global set, point `--rules`
   at a project file instead, or ask for merge support (plugin + project).
 
+## Companion skills (for others installing this)
+
+The default `.claude/skill-rules.json` requires skills that live in a separate
+collection — **https://github.com/tae2089/skills** — namely
+`coding-quality-guardrails`, `diagnosing-bugs`, `writing-great-skills`,
+`flow-design`, `execute-dispatch-unit`, `decompose-and-dispatch`, and
+`ready-code-review`. Only `artifact-judge` ships inside agent-gate. A rule that
+requires a skill the host can't find will block unsatisfiably, so install both:
+
+```
+# 1) enforcement (this repo) — see per-host steps above
+# 2) the skills the rules reference, into your host's global skill dir:
+git clone https://github.com/tae2089/skills ~/src/tae2089-skills
+ln -s ~/src/tae2089-skills/*/  ~/.claude/skills/                 # Claude Code
+ln -s ~/src/tae2089-skills/*/  ~/.agents/skills/                 # Codex CLI
+ln -s ~/src/tae2089-skills/*/  ~/.gemini/antigravity-cli/skills/ # Antigravity
+```
+
+That collection is a plain SKILL.md set (no plugin manifest yet), so install is
+a clone + symlink. If you only want a subset, trim the rules instead of the
+symlinks. (Packaging tae2089/skills as its own plugin would make this a single
+`/plugin install`; not done yet.)
+
 ## Notes / unverified
 
 - The Antigravity plugin script paths use the documented staging directory. If
