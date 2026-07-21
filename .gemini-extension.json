@@ -1,0 +1,5 @@
+{
+  "name": "agent-gate",
+  "version": "0.1.0",
+  "description": "Deterministic enforcement for coding agents: block turn-end when a required skill/MCP call is missing, re-inject the handoff after compaction, and gate source edits on task readiness. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
+}
