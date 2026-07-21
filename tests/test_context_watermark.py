@@ -195,6 +195,22 @@ class TestWatermark(WatermarkHarness):
         proc = self.run_hook(extra_args=["--check", str(self.transcript)], stdin_raw="")
         self.assertIn("92.5%", proc.stdout)
 
+    def test_t17_default_threshold_blocks_below_old_ninety(self):
+        # A4: degradation starts well before the window fills, so the default
+        # gate is 0.8. 0.85 of 200k must block without an explicit --threshold.
+        self.write_transcript([assistant_usage(170_000)])
+        proc = subprocess.run(
+            [sys.executable, str(WATERMARK), "--window", "200000"],
+            input=json.dumps(self.hook_input()), capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(proc.stdout)["decision"], "block")
+
+    def test_t18_block_reason_demands_verbatim_user_quotes(self):
+        # A5: paraphrased judgments degrade recall; the reason must ask for quotes.
+        self.write_transcript([assistant_usage(190_000)])
+        reason = json.loads(self.run_hook(self.hook_input()).stdout)["reason"]
+        self.assertRegex(reason, r"(verbatim|원문|그대로|quote)")
+
 
 if __name__ == "__main__":
     unittest.main()

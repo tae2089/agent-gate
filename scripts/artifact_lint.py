@@ -40,23 +40,36 @@ FILE_PATH_PATTERN = r"[\w./-]+\.(md|py|go|ts|tsx|java|kt|json|yaml|yml|sh|toml)\
 
 HANDOFF_CHECKS = [
     Check("goal", 0.15, False, "goal section", ["목표", "goal"]),
-    Check("completed", 0.15, False, "completed-work section", ["완료", "completed", "work done"]),
+    Check("completed", 0.10, False, "completed-work section", ["완료", "completed", "work done"]),
     Check("decisions", 0.20, True, "decisions/judgments section", ["결정", "판단", "decision", "judgment"]),
-    Check("verified", 0.15, False, "verified-state section", ["검증", "verified", "verification"]),
+    Check("verified", 0.10, False, "verified-state section", ["검증", "verified", "verification"]),
     Check("next", 0.20, True, "next-steps section", ["다음", "next"]),
     Check("file_paths", 0.15, False, "at least one file path cited", pattern=FILE_PATH_PATTERN),
+    # Paraphrased user judgments lose recall vs verbatim text (arXiv 2601.00821),
+    # so reward a literal quote or blockquote — the "task B is low-value" case.
+    Check("user_quotes", 0.10, False, "a verbatim quote or blockquote preserved",
+          pattern=r"(?m)(^\s*>\s*\S|[\"“”「『][^\"“”」』\n]{3,}[\"“”」』])"),
 ]
 
 # implementation.md is flat bullets by convention, so these are whole-document
 # keyword checks rather than section checks.
 IMPLEMENTATION_CHECKS = [
     Check("approach", 0.25, False, "design approach stated",
-          pattern=r"설계|접근|구조|방식|위치|approach|design|architecture"),
+          pattern=r"설계|접근|구조|방식|위치|(?i:approach|design|architecture)"),
     Check("assumptions", 0.15, False, "assumptions or measured evidence labeled",
-          pattern=r"가정|전제|실측|근거|assumption|measured"),
+          pattern=r"가정|전제|실측|근거|(?i:assumption|measured)"),
     Check("affected_files", 0.30, True, "affected modules/files cited", pattern=FILE_PATH_PATTERN),
     Check("risks", 0.30, True, "risks/edge cases listed",
-          pattern=r"위험|엣지|한계|risk|edge"),
+          pattern=r"위험|엣지|한계|(?i:risk|edge)"),
+]
+
+TASK_CHECKS = [
+    Check("contract", 0.25, True, "contract section", ["계약", "contract"]),
+    Check("test_plan", 0.20, True, "ordered test-plan section", ["테스트 계획", "test plan"]),
+    Check("implementation", 0.15, True, "implementation checklist section", ["구현", "implementation"]),
+    Check("verification", 0.15, True, "verification checklist section", ["검증", "verification"]),
+    Check("acceptance_ids", 0.25, True, "at least one stable AC-number identifier",
+          pattern=r"\bAC-\d+\b"),
 ]
 
 _WALKTHROUGH_ENTRY = r"^\[[^\]]*\]\s*(decision|error|verification)\s*:"
@@ -73,6 +86,7 @@ WALKTHROUGH_CHECKS = [
 TYPES = {
     "handoff": HANDOFF_CHECKS,
     "implementation": IMPLEMENTATION_CHECKS,
+    "task": TASK_CHECKS,
     "walkthrough": WALKTHROUGH_CHECKS,
 }
 

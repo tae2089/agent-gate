@@ -67,6 +67,16 @@ class TestArtifactLint(unittest.TestCase):
         self.assertTrue(data["passed"])
         self.assertIn("checks", data)
 
+    def test_t7_user_quotes_detected(self):
+        with_quote = GOOD_HANDOFF + '\n## 사용자 판단\n- 사용자: "B 작업은 짜치는 작업이다"\n'
+        data = json.loads(self.lint(with_quote, json_out=True).stdout)
+        self.assertTrue(data["checks"]["user_quotes"])
+
+    def test_t8_no_quotes_still_passes_but_flags_user_quotes(self):
+        data = json.loads(self.lint(GOOD_HANDOFF, json_out=True).stdout)
+        self.assertTrue(data["passed"])  # non-floor, so absence does not fail
+        self.assertFalse(data["checks"]["user_quotes"])
+
     def test_t6_non_utf8_file_errors_cleanly(self):
         artifact = self.dir / "handoff.md"
         artifact.write_bytes(b"\xff\xfe")
@@ -96,6 +106,23 @@ GOOD_IMPLEMENTATION = """# implementation: watermark 보강
 GOOD_WALKTHROUGH = """[2026-07-21 10:00] decision: 정규화를 parse_transcript 내부 단일 지점으로
 [2026-07-21 10:20] error: watermark 데드락 — 합성 Write 부재가 원인
 [2026-07-21 11:00] verification: 테스트 68개 그린, 실 rollout 스모크 통과
+"""
+
+GOOD_TASK = """# Contract
+
+- AC-1: A guarded source edit requires a fresh readiness assessment.
+
+# Test Plan
+
+- T-1 [Todo]: prove an unbound session is blocked before implementation.
+
+# Implementation
+
+- [Todo] Add the gate in hooks/readiness_gate.py for AC-1.
+
+# Verification
+
+- [Todo] Run the focused hook tests and the full test suite.
 """
 
 
@@ -128,6 +155,17 @@ class TestImplementationProfile(unittest.TestCase):
         data = json.loads(self.lint(content).stdout)
         self.assertFalse(data["passed"])
         self.assertIn("affected_files", data["floor_failures"])
+
+    def test_i4_english_keywords_are_case_insensitive(self):
+        content = """# Implementation
+
+- Design: normalize events in hooks/readiness_gate_hook.py.
+- Assumption: both runtimes provide a stable session id.
+- Affected file: tests/test_readiness_hook.py.
+- Risk: an outdated assessment must fail closed.
+"""
+        data = json.loads(self.lint(content).stdout)
+        self.assertTrue(data["passed"], data)
 
 
 class TestWalkthroughProfile(unittest.TestCase):
@@ -165,3 +203,37 @@ class TestWalkthroughProfile(unittest.TestCase):
         result = lint_file(f, "walkthrough")
         self.assertIsNotNone(result)
         self.assertTrue(result["passed"])
+
+
+class TestTaskProfile(unittest.TestCase):
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+
+    def lint(self, content):
+        artifact = self.dir / "task.md"
+        artifact.write_text(content, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, str(LINT), "--type", "task", "--json", str(artifact)],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    def test_task_with_contract_sections_and_ac_id_passes(self):
+        proc = self.lint(GOOD_TASK)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertTrue(json.loads(proc.stdout)["passed"])
+
+    def test_task_without_ac_id_fails_floor(self):
+        proc = self.lint(GOOD_TASK.replace("AC-1", "requirement"))
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("acceptance_ids", json.loads(proc.stdout)["floor_failures"])
+
+    def test_task_requires_each_workflow_section(self):
+        for heading, body in (
+            ("# Contract", "- AC-1: A guarded source edit requires a fresh readiness assessment."),
+            ("# Test Plan", "- T-1 [Todo]: prove an unbound session is blocked before implementation."),
+            ("# Implementation", "- [Todo] Add the gate in hooks/readiness_gate.py for AC-1."),
+            ("# Verification", "- [Todo] Run the focused hook tests and the full test suite."),
+        ):
+            with self.subTest(heading=heading):
+                proc = self.lint(GOOD_TASK.replace(f"{heading}\n\n{body}", ""))
+                self.assertEqual(proc.returncode, 1, proc.stdout + proc.stderr)

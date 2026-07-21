@@ -37,7 +37,9 @@ from artifact_lint import lint_file  # noqa: E402
 
 LABEL = "context-watermark"
 DEFAULT_WINDOW = 200_000
-DEFAULT_THRESHOLD = 0.9
+# Long-context recall degrades well before the window fills (Chroma "Context
+# Rot", 2025), so evacuate at 0.8 rather than waiting for a near-full window.
+DEFAULT_THRESHOLD = 0.8
 
 
 def _current_turn(entries: list[dict]) -> list[dict]:
@@ -116,7 +118,8 @@ def _run_hook(hook_input: dict, window: int, threshold: float) -> int:
         "create _workspace/<current-task>/handoff.md (or handoff.md in cwd if no task folder) "
         "covering: current goal, work completed with file paths, key decisions and why, "
         "user corrections and value judgments (which work was deemed low-value, wasteful, or "
-        "skippable — preserve these first, they are the most expensive to rediscover), "
+        "skippable — preserve these first and quote them verbatim rather than paraphrasing, "
+        "they are the most expensive to rediscover and lose the most in summary), "
         "verified state (tests/commands run), and exact next steps. Then finish the turn."
     )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
