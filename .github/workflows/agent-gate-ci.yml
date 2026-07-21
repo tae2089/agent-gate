@@ -1,0 +1,19 @@
+name: agent-gate-ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Hooks are stdlib-only; no dependency install needed.
+      - name: Unit tests
+        run: python3 -m unittest discover -s tests
+      - name: Replay rule-verdict corpus (regression guard)
+        run: python3 scripts/replay_audit.py tests/fixtures/replay/manifest.json

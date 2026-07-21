@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "name": "debugging-without-skill-blocks",
+      "transcript": "case_block.jsonl",
+      "rules": "rules_replay.json",
+      "expect_block": ["debugging-needs-diagnosing-bugs"]
+    },
+    {
+      "name": "debugging-with-skill-passes",
+      "transcript": "case_pass.jsonl",
+      "rules": "rules_replay.json",
+      "expect_block": []
+    }
+  ]
+}
