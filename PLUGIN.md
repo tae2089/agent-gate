@@ -56,6 +56,21 @@ staging location is fixed, so no plugin-root variable is needed.
   any readable store, and gating on a char-count estimate would make a
   deterministic gate probabilistic. Reinject covers context-loss recovery.
 
+## Rules and skills
+
+The plugin ships the **mechanism** (hooks) and its own **`artifact-judge`**
+skill. It does **not** hardcode enforcement rules onto your project:
+
+- **Rules are per-project.** The verifier reads `.claude/skill-rules.json`
+  from the target project's directory. With no such file, it enforces nothing
+  (opt-in). Copy this repo's `.claude/skill-rules.json` as a starting template
+  and edit it to reference the skills your project actually has.
+- **Skills are yours.** `artifact-judge` installs with the plugin. Every other
+  skill named in your rules (e.g. `coding-quality-guardrails`, `diagnosing-bugs`)
+  must be installed separately — the plugin does not redistribute them. A rule
+  that requires a skill the host cannot find will block unsatisfiably, so only
+  reference skills you have.
+
 ## Notes / unverified
 
 - The Antigravity plugin script paths use the documented staging directory. If
