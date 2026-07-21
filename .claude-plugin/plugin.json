@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "agent-gate",
+  "description": "Deterministic enforcement for coding agents: block turn-end when a required skill/MCP call is missing, force a handoff before context fills, re-inject it after compaction, and gate source edits on task readiness.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "keywords": ["hooks", "enforcement", "skills", "handoff", "guardrails"],
+  "skills": "./.claude/skills/",
+  "hooks": "./hooks/hooks.json"
+}

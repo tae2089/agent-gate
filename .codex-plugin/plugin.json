@@ -1,0 +1,7 @@
+{
+  "name": "agent-gate",
+  "version": "0.1.0",
+  "description": "Deterministic enforcement for coding agents: block turn-end when a required skill/MCP call is missing, force a handoff before context fills, re-inject it after compaction, and gate source edits on task readiness.",
+  "skills": "./.agents/skills/",
+  "hooks": "./hooks/hooks.json"
+}

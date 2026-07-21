@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/skill_invocation_verifier.py", "--rules", "${CLAUDE_PLUGIN_ROOT}/.claude/skill-rules.json"]
+          },
+          {
+            "type": "command",
+            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/context_watermark.py"]
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/handoff_reinject.py"]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/readiness_gate_hook.py", "--mode", "pre"]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|apply_patch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/readiness_gate_hook.py", "--mode", "bind"]
+          }
+        ]
+      }
+    ]
+  }
+}

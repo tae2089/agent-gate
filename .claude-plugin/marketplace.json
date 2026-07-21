@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "agent-gate",
+  "owner": { "name": "agent-gate" },
+  "plugins": [
+    {
+      "name": "agent-gate",
+      "source": ".",
+      "description": "Deterministic hook-based enforcement layer for coding agents (verifier, watermark, reinject, readiness gate)."
+    }
+  ]
+}
