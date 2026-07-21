@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/prompt_router.py", "--rules", "${CLAUDE_PLUGIN_ROOT}/.claude/skill-rules.json"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/prompt_router.py\" --rules \"${CLAUDE_PLUGIN_ROOT}/.claude/skill-rules.json\""
           }
         ]
       }
@@ -15,11 +15,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/skill_invocation_verifier.py", "--rules", "${CLAUDE_PLUGIN_ROOT}/.claude/skill-rules.json"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/skill_invocation_verifier.py\" --rules \"${CLAUDE_PLUGIN_ROOT}/.claude/skill-rules.json\""
           },
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/context_watermark.py"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/context_watermark.py\""
           }
         ]
       }
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/handoff_reinject.py"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/handoff_reinject.py\""
           }
         ]
       }
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/readiness_gate_hook.py", "--mode", "pre"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/readiness_gate_hook.py\" --mode pre"
           }
         ]
       }
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ["python3", "${CLAUDE_PLUGIN_ROOT}/hooks/readiness_gate_hook.py", "--mode", "bind"]
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/readiness_gate_hook.py\" --mode bind"
           }
         ]
       }
