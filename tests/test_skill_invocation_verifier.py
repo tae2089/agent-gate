@@ -77,6 +77,13 @@ class TestVerifier(VerifierHarness):
         ])
         self.assert_blocked(self.run_hook(self.hook_input()), "diagnosing-bugs")
 
+    def test_b8_block_reason_states_the_unblock_action(self):
+        self.write_rules([DEBUG_RULE])
+        self.write_transcript([user_text("이 버그 좀 디버깅 해줘"),
+                               tool_use("Read", {"file_path": "/x/main.go"})])
+        reason = json.loads(self.run_hook(self.hook_input()).stdout)["reason"]
+        self.assertIn("To finish the turn", reason)  # remedy stated, not just the failure
+
     def test_t2_skill_called_earlier_in_session_passes(self):
         self.write_rules([DEBUG_RULE])
         self.write_transcript([

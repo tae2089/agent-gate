@@ -174,9 +174,9 @@ def _run_hook(hook_input: dict, rules_arg: str | None) -> int:
         return 0
     lines = [f"rule '{v.rule_id}': {v.guidance}" for v in violations]
     reason = (
-        "[agent-gate] Required skill/tool calls are missing for this turn: "
+        "[agent-gate] This turn required skill/tool calls that are missing: "
         + "; ".join(lines)
-        + ". Invoke them now, apply their instructions to the work just done, then finish the turn."
+        + ". To finish the turn, invoke them now and apply their instructions to the work just done."
     )
     print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
     return 0
