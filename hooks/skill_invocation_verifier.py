@@ -31,6 +31,7 @@ import argparse
 import json
 import re
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -110,7 +111,8 @@ def _satisfied(rule: dict, session_calls: list[ToolCall], cwd: str | None) -> bo
         if not isinstance(spec, str):
             raise ValueError("required test_report must be a path string")
         if cwd is None:
-            return True  # audit without cwd cannot read the report; do not flag
+            note(LABEL, f"test_report rule unverifiable without cwd (audit mode); skipping {spec!r}")
+            return True
         return _test_report_passing(Path(cwd), spec)
     raise ValueError("rule has no require target")
 
@@ -137,24 +139,31 @@ def _test_report_passing(cwd: Path, spec: str) -> bool:
 
 def _report_verdict(text: str) -> bool | None:
     """True=green, False=has failures, None=not a recognized report."""
-    stripped = text.lstrip()
-    if stripped.startswith("{"):
+    if text.lstrip().startswith("{"):
         try:
             data = json.loads(text)
         except json.JSONDecodeError:
             return None
-        summary = data.get("summary") if isinstance(data.get("summary"), dict) else data
+        summary = data.get("summary")
         if not isinstance(summary, dict):
-            return None
+            summary = data if isinstance(data, dict) else {}
         failed = summary.get("failed", summary.get("failures"))
-        errored = summary.get("errors", 0)
         if failed is None:
             return None
-        return int(failed) == 0 and int(errored or 0) == 0
-    counts = re.findall(r'(failures|errors)="(\d+)"', text)
-    if not counts:
+        return int(failed) == 0 and int(summary.get("errors") or 0) == 0
+    try:
+        root = ET.fromstring(text)
+        seen = False
+        total = 0
+        for suite in list(root.iter("testsuite")) or [root]:
+            for key in ("failures", "errors"):
+                value = suite.get(key)
+                if value is not None:
+                    seen = True
+                    total += int(value)
+    except (ET.ParseError, ValueError):
         return None
-    return all(int(n) == 0 for _, n in counts)
+    return (total == 0) if seen else None
 
 
 def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
@@ -186,6 +195,12 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
             guidance += f" — {rule['message']}"
         violations.append(Violation(rule_id=rule_id, guidance=guidance))
     return violations
+
+
+def evaluate_transcript(rules: list[dict], entries: list[dict], cwd: str | None = None) -> list[Violation]:
+    """Single composition of the verifier pipeline, shared by the hook, the
+    audit --check mode, and the replay harness so all three run the same path."""
+    return evaluate(rules, *collect(entries), cwd=cwd)
 
 
 def load_rules(rules_arg: str | None, cwd: str | None) -> list[dict] | None:
@@ -221,7 +236,7 @@ def _run_hook(hook_input: dict, rules_arg: str | None) -> int:
     if not rules:
         return 0
     entries = parse_transcript(Path(hook_input.get("transcript_path")))
-    violations = evaluate(rules, *collect(entries), cwd=hook_input.get("cwd"))
+    violations = evaluate_transcript(rules, entries, cwd=hook_input.get("cwd"))
     if not violations:
         return 0
     lines = [f"rule '{v.rule_id}': {v.guidance}" for v in violations]
@@ -244,7 +259,7 @@ def run_check(rules_arg: str | None, transcript: str) -> int:
     except OSError as exc:
         print(f"cannot read transcript: {exc}", file=sys.stderr)
         return 2
-    violations = evaluate(rules, *collect(entries))
+    violations = evaluate_transcript(rules, entries)
     if not violations:
         print("OK: no violations")
         return 0

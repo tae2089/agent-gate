@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hooks"))
-from skill_invocation_verifier import collect, evaluate, load_rules  # noqa: E402
+from skill_invocation_verifier import evaluate_transcript, load_rules  # noqa: E402
 from transcript import parse_transcript  # noqa: E402
 
 
@@ -38,8 +38,7 @@ def run_case(base: Path, case: dict) -> tuple[bool, str]:
     if not rules:
         return False, f"FAIL {name}: rules not loaded"
     transcript = _resolve(base, case["transcript"])
-    cwd = transcript.parent
-    violations = evaluate(rules, *collect(parse_transcript(transcript)), cwd=str(cwd))
+    violations = evaluate_transcript(rules, parse_transcript(transcript), cwd=str(transcript.parent))
     actual = sorted(v.rule_id for v in violations)
     expected = sorted(case.get("expect_block", []))
     if actual == expected:

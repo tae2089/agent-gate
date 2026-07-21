@@ -40,8 +40,10 @@ class WatermarkHarness(unittest.TestCase):
     def write_transcript(self, entries):
         self.transcript.write_text("\n".join(json.dumps(e) for e in entries), encoding="utf-8")
 
-    def run_hook(self, hook_input=None, stdin_raw=None, extra_args=None):
-        args = [sys.executable, str(WATERMARK), "--window", "200000", "--threshold", "0.9"]
+    def run_hook(self, hook_input=None, stdin_raw=None, extra_args=None, threshold="0.9"):
+        args = [sys.executable, str(WATERMARK), "--window", "200000"]
+        if threshold is not None:  # None exercises the built-in default threshold
+            args += ["--threshold", threshold]
         if extra_args:
             args += extra_args
         data = stdin_raw if stdin_raw is not None else json.dumps(hook_input)
@@ -199,9 +201,7 @@ class TestWatermark(WatermarkHarness):
         # A4: degradation starts well before the window fills, so the default
         # gate is 0.8. 0.85 of 200k must block without an explicit --threshold.
         self.write_transcript([assistant_usage(170_000)])
-        proc = subprocess.run(
-            [sys.executable, str(WATERMARK), "--window", "200000"],
-            input=json.dumps(self.hook_input()), capture_output=True, text=True, timeout=30)
+        proc = self.run_hook(self.hook_input(), threshold=None)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(json.loads(proc.stdout)["decision"], "block")
 
