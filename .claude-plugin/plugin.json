@@ -5,6 +5,5 @@
   "version": "0.1.0",
   "license": "MIT",
   "keywords": ["hooks", "enforcement", "skills", "handoff", "guardrails"],
-  "skills": "./.claude/skills/",
-  "hooks": "./hooks/hooks.json"
+  "skills": "./.claude/skills/"
 }
