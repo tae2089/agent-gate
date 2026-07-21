@@ -13,6 +13,15 @@ Usage (from .agents/hooks.json):
 
 Fail-open: any adapter-level failure emits an allow/no-op so a shim bug can
 never lock an Antigravity session — the same policy the hooks themselves use.
+
+Antigravity coverage (measured against transcript_full.jsonl, codex-cli-style):
+- readiness (Pre/PostToolUse): supported — the tool call is normalized here.
+- verifier (Stop): supported — transcript.py normalizes Antigravity lines and
+  reads skill use from a view_file with args.IsSkillFile.
+- watermark (Stop): unsupported — Antigravity records no token/usage in the
+  transcript, so context size cannot be computed; left unwired.
+- reinject (SessionStart): unsupported — Antigravity command hooks have no
+  session-start event.
 """
 
 from __future__ import annotations
@@ -21,6 +30,10 @@ import argparse
 import json
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from transcript import antigravity_tool  # noqa: E402
 
 
 def to_claude_stdin(event_json: dict) -> dict:
@@ -34,9 +47,9 @@ def to_claude_stdin(event_json: dict) -> dict:
         "stop_hook_active": False,
     }
     tool_call = event_json.get("toolCall")
-    if isinstance(tool_call, dict):
-        claude["tool_name"] = tool_call.get("name")
-        claude["tool_input"] = tool_call.get("args")
+    if isinstance(tool_call, dict) and isinstance(tool_call.get("name"), str):
+        args = tool_call.get("args") if isinstance(tool_call.get("args"), dict) else {}
+        claude["tool_name"], claude["tool_input"] = antigravity_tool(tool_call["name"], args)
     return claude
 
 

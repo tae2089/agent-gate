@@ -48,8 +48,15 @@ def parse_transcript(path: Path) -> list[dict]:
             except json.JSONDecodeError:
                 continue  # partial line from a concurrent append
             if isinstance(entry, dict):
-                entries.append(_normalize_codex(entry))
+                entries.append(_normalize(entry))
     return entries
+
+
+def _normalize(entry: dict) -> dict:
+    """Dispatch to the right CLI normalizer; Claude entries pass through."""
+    if "step_index" in entry and "source" in entry:  # Antigravity transcript line
+        return _normalize_antigravity(entry)
+    return _normalize_codex(entry)
 
 
 # Codex has no Skill tool; agents apply a skill by shell-reading its SKILL.md,
@@ -70,6 +77,46 @@ _CODEX_HANDOFF_RE = re.compile(r"[\w./~-]{0,512}handoff\.md")
 # backslash/quote that terminates them when the patch is embedded in exec JS.
 _CODEX_PATCH_RE = re.compile(r"\*\*\* (Add|Update) File: ([^\n\\\"']+)")
 _PATCH_ACTION_TOOL = {"Add": "Write", "Update": "Edit"}
+
+# Antigravity tool vocabulary → Claude tool names / input keys. Shared with
+# antigravity_adapter.py so the live PreToolUse event and the transcript agree.
+# Antigravity marks a skill read with args.IsSkillFile instead of a Skill tool.
+ANTIGRAVITY_TOOL_NAMES = {"view_file": "Read", "write_to_file": "Write", "run_command": "Bash"}
+ANTIGRAVITY_ARG_KEYS = {"TargetFile": "file_path", "AbsolutePath": "file_path",
+                        "CommandLine": "command"}
+
+
+def antigravity_tool(name: str, args: dict) -> tuple[str, dict]:
+    """Map an Antigravity (name, args) tool call to (claude_name, claude_input)."""
+    claude_name = ANTIGRAVITY_TOOL_NAMES.get(name, name)
+    claude_input = {ANTIGRAVITY_ARG_KEYS.get(k, k): v for k, v in args.items()}
+    return claude_name, claude_input
+
+
+def _normalize_antigravity(entry: dict) -> dict:
+    """Map an Antigravity transcript line to the Claude entry shape."""
+    etype = entry.get("type")
+    if etype == "USER_INPUT" and isinstance(entry.get("content"), str):
+        match = re.search(r"<USER_REQUEST>(.*?)</USER_REQUEST>", entry["content"], re.DOTALL)
+        text = (match.group(1) if match else entry["content"]).strip()
+        return {"type": "user", "message": {"role": "user", "content": text}}
+    if etype == "PLANNER_RESPONSE" and isinstance(entry.get("tool_calls"), list):
+        content = []
+        for call in entry["tool_calls"]:
+            if not isinstance(call, dict) or not isinstance(call.get("name"), str):
+                continue
+            name = call["name"]
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            mapped_name, mapped_input = antigravity_tool(name, args)
+            content.append({"type": "tool_use", "name": mapped_name, "input": mapped_input})
+            if name == "view_file" and args.get("IsSkillFile") is True \
+                    and isinstance(args.get("AbsolutePath"), str):
+                skill = Path(args["AbsolutePath"]).parent.name
+                if skill:
+                    content.append({"type": "tool_use", "name": "Skill", "input": {"skill": skill}})
+        if content:
+            return {"type": "assistant", "message": {"role": "assistant", "content": content}}
+    return entry
 
 
 def _codex_output_is_error(payload: dict) -> bool:
