@@ -56,20 +56,27 @@ staging location is fixed, so no plugin-root variable is needed.
   any readable store, and gating on a char-count estimate would make a
   deterministic gate probabilistic. Reinject covers context-loss recovery.
 
-## Rules and skills
+## Rules and your personal skills
 
-The plugin ships the **mechanism** (hooks) and its own **`artifact-judge`**
-skill. It does **not** hardcode enforcement rules onto your project:
+The plugin carries **your** ruleset — `.claude/skill-rules.json` in this repo —
+and the verifier hooks point `--rules` at it, so the same enforcement travels
+to every project you install the plugin into.
 
-- **Rules are per-project.** The verifier reads `.claude/skill-rules.json`
-  from the target project's directory. With no such file, it enforces nothing
-  (opt-in). Copy this repo's `.claude/skill-rules.json` as a starting template
-  and edit it to reference the skills your project actually has.
-- **Skills are yours.** `artifact-judge` installs with the plugin. Every other
-  skill named in your rules (e.g. `coding-quality-guardrails`, `diagnosing-bugs`)
-  must be installed separately — the plugin does not redistribute them. A rule
-  that requires a skill the host cannot find will block unsatisfiably, so only
-  reference skills you have.
+- **The rules reference skills, the host resolves them.** The verifier only
+  checks the transcript for whether `Skill(X)` was invoked; it does not load
+  the skill. Your personal skills (`coding-quality-guardrails`,
+  `diagnosing-bugs`, `flow-design`, …) live in your global skill dirs
+  (`~/.claude/skills`, `~/.agents/skills`, `~/.gemini/antigravity-cli/skills`),
+  where each host already finds them — so a rule requiring one is satisfiable
+  wherever those skills are installed.
+- **To wire your own skills:** edit `.claude/skill-rules.json` — add a rule per
+  skill (`when` = prompt/tool pattern, `require` = `{"skill": "<name>"}`). The
+  bundled `artifact-judge` skill installs with the plugin; the rest resolve
+  from your global install.
+- **Portability:** the rules file is shared across all three hosts. Keep skill
+  names identical to how each host registers them.
+- If you also want per-project rules on top of the global set, point `--rules`
+  at a project file instead, or ask for merge support (plugin + project).
 
 ## Notes / unverified
 
