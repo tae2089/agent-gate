@@ -56,8 +56,6 @@ def run_stop(event: dict[str, Any]) -> int:
         if state != "bound" or task_dir is None:
             return _block("scenario completion has an unsafe readiness session marker")
         result = validate_completion(task_dir, root)
-        if result.warnings:
-            note(LABEL, "scenario advisory: " + "; ".join(result.warnings[:3]))
         if not result.allowed:
             reason = "; ".join(result.errors[:3]) or "required scenario evidence is missing"
             return _block(f"scenario completion is not ready: {reason}")

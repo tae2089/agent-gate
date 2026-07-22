@@ -38,7 +38,7 @@ class ReplayAuditTest(unittest.TestCase):
             tampered.write_text(json.dumps(manifest), encoding="utf-8")
             proc = run(tampered)
         self.assertEqual(proc.returncode, 1, proc.stdout)
-        self.assertIn("debugging-with-skill-passes", proc.stdout)
+        self.assertIn("artifact-scoring-with-judge-passes", proc.stdout)
 
 
 if __name__ == "__main__":

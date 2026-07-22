@@ -78,15 +78,12 @@ class TestHookConfig(unittest.TestCase):
                     matcher = hooks[event][0]["matcher"]
                     self.assertEqual(set(matcher.split("|")), ANTIGRAVITY_MUTATORS)
 
-    def test_implementation_edits_route_through_flow_design(self):
+    def test_implementation_edits_are_not_gated_by_skill_invocation(self):
         rules = self.load(".claude/skill-rules.json")["rules"]
         matches = [rule for rule in rules
                    if rule.get("require") == {"skill": "flow-design"}
                    and "input_pattern" in rule.get("when", {})]
-        self.assertEqual(len(matches), 1)
-        self.assertEqual(matches[0]["when"].get("tool"), "Write|Edit")
-        self.assertRegex('"/project/_workspace/change/implementation.md"',
-                         matches[0]["when"]["input_pattern"])
+        self.assertEqual(matches, [])
 
     def test_all_hosts_wire_scenario_completion_stop_hook(self):
         claude_files = ("hooks/hooks.json", ".claude/settings.json")

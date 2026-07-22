@@ -38,7 +38,7 @@ def run_case(base: Path, case: dict) -> tuple[bool, str]:
     if not rules:
         return False, f"FAIL {name}: rules not loaded"
     transcript = _resolve(base, case["transcript"])
-    violations = evaluate_transcript(rules, parse_transcript(transcript), cwd=str(transcript.parent))
+    violations = evaluate_transcript(rules, parse_transcript(transcript))
     actual = sorted(v.rule_id for v in violations)
     expected = sorted(case.get("expect_block", []))
     if actual == expected:

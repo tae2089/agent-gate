@@ -64,15 +64,11 @@ to every project you install the plugin into.
 
 - **The rules reference skills, the host resolves them.** The verifier only
   checks the transcript for whether `Skill(X)` was invoked; it does not load
-  the skill. Your personal skills (`coding-quality-guardrails`,
-  `diagnosing-bugs`, `flow-design`, …) live in your global skill dirs
-  (`~/.claude/skills`, `~/.agents/skills`, `~/.gemini/antigravity-cli/skills`),
-  where each host already finds them — so a rule requiring one is satisfiable
-  wherever those skills are installed.
+  the skill. The default policy references only the bundled `artifact-judge`.
 - **To wire your own skills:** edit `.claude/skill-rules.json` — add a rule per
-  skill (`when` = prompt/tool pattern, `require` = `{"skill": "<name>"}`). The
-  bundled `artifact-judge` skill installs with the plugin; the rest resolve
-  from your global install.
+  skill (`when` = prompt/tool pattern, `require` = `{"skill": "<name>"}`). Add
+  process rules only when an existing artifact or result validator cannot own
+  the invariant. The bundled `artifact-judge` skill installs with the plugin.
 - **Portability:** the rules file is shared across all three hosts. Keep skill
   names identical to how each host registers them.
 - If you also want per-project rules on top of the global set, point `--rules`
@@ -83,35 +79,18 @@ Readiness and scenario inheritance are host-neutral: a decomposed child writes
 parent and its P/AC scope. The same PostToolUse/PreToolUse hooks bind and
 revalidate it on Claude Code, Codex, and Antigravity; unit size never creates a
 Fast source-edit bypass. When the target repository opts in with
-`.agent-gate/scenario-gate.json`, the child also selects parent scenario IDs in
-`scenario-overlay.json`, may add reviewed local scenarios, and the Stop hook
-checks fresh runner evidence according to advisory, critical-enforce, or
-enforce mode. If a host cannot enforce Stop reliably, run
+`.agent-gate/scenario-gate.json`, every child keeps the direct Full parent's
+scenario contract, semantic evidence, and execution result as its completion
+boundary. The Stop hook requires 100% observable evidence coverage and every
+exclusive scenario check to pass. If a host cannot enforce Stop reliably, run
 `scripts/scenario_gate.py completion` as the CI merge gate.
 
-## Companion skills (for others installing this)
+## Bundled skills
 
-The default `.claude/skill-rules.json` requires skills that live in a separate
-collection — **https://github.com/tae2089/skills** — namely
-`coding-quality-guardrails`, `diagnosing-bugs`, `writing-great-skills`,
-`flow-design`, `execute-dispatch-unit`, `decompose-and-dispatch`, and
-`ready-code-review`. `artifact-judge` and `scenario-design` ship inside
-agent-gate. A rule that
-requires a skill the host can't find will block unsatisfiably, so install both:
-
-```
-# 1) enforcement (this repo) — see the per-host steps above
-# 2) the skills the rules reference — one command, all hosts auto-detected:
-npx skills add github.com/tae2089/skills -g          # global (~/<agent>/skills)
-# or target hosts / a subset:
-npx skills add github.com/tae2089/skills -g -a claude-code codex
-npx skills add github.com/tae2089/skills -g -s coding-quality-guardrails diagnosing-bugs
-```
-
-`npx skills` (Vercel Labs `skills`) clones the repo, discovers all 14 SKILL.md
-skills, and symlinks them into each detected host's skill dir (`~/.claude/skills`,
-`~/.codex/skills`, `~/.gemini/antigravity/skills`, …). Omit `-g` to install
-project-locally instead. If you only want a subset, use `-s` (or trim the rules).
+`artifact-judge` and `scenario-design` ship inside agent-gate. The default rules
+require only `artifact-judge`, so installing a separate personal skill collection
+is not necessary. A downstream rule that names another skill is satisfiable only
+when that host has the named skill installed.
 
 ## Notes / unverified
 
@@ -123,9 +102,9 @@ project-locally instead. If you only want a subset, use `-s` (or trim the rules)
 - Scenario runner commands are trusted repository configuration. The plugin
   removes most inherited environment variables and never uses a shell, but it
   does not provide an OS-level network sandbox.
-- Critical scenarios require exclusive runners. Independent scenario review is
-  bound to the runner configuration and rejects unproven command coverage or
-  zero-test success behavior.
+- Every scenario requires an exclusive runner, so one process result is never
+  copied across scenario IDs. Independent evidence review maps observations to
+  implementation and verification source, and never judges runner commands.
 - The repo's workspace configs (`.claude/settings.json`, `.codex/hooks.json`,
   `.agents/hooks.json`) are for dogfooding agent-gate on itself and are separate
   from these plugin manifests.

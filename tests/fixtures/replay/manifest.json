@@ -1,13 +1,13 @@
 {
   "cases": [
     {
-      "name": "debugging-without-skill-blocks",
+      "name": "artifact-scoring-without-judge-blocks",
       "transcript": "case_block.jsonl",
       "rules": "rules_replay.json",
-      "expect_block": ["debugging-needs-diagnosing-bugs"]
+      "expect_block": ["artifact-scoring-needs-artifact-judge"]
     },
     {
-      "name": "debugging-with-skill-passes",
+      "name": "artifact-scoring-with-judge-passes",
       "transcript": "case_pass.jsonl",
       "rules": "rules_replay.json",
       "expect_block": []

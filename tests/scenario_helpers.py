@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from readiness_helpers import CHILD_TASK, inheritance_for, write_ready_artifacts
@@ -24,19 +25,23 @@ def scenario(
     *,
     acceptance: list[str],
     flow: list[str],
-    risk: str = "standard",
-    runner: str = "integration",
+    runner: str,
+    observation_id: str | None = None,
 ) -> dict:
+    observation_id = observation_id or f"O-{scenario_id.removeprefix('S-')}"
     return {
         "id": scenario_id,
         "title": f"Observable behavior for {scenario_id}",
         "covers": {"acceptance": acceptance, "flow": flow},
-        "risk": risk,
-        "level": "integration",
         "runner": runner,
         "given": ["a controlled project state"],
         "when": ["the public operation runs"],
-        "then": ["an observable result is returned"],
+        "then": [
+            {
+                "id": observation_id,
+                "expectation": "an observable result is returned",
+            }
+        ],
     }
 
 
@@ -48,107 +53,55 @@ def parent_contract() -> dict:
                 "S-ALLOW-READY",
                 acceptance=["AC-2"],
                 flow=["P1"],
+                runner="ready-check",
             ),
             scenario(
                 "S-BLOCK-STALE",
                 acceptance=["AC-1"],
                 flow=["P2"],
-                risk="critical",
-                runner="critical",
+                runner="stale-check",
             ),
         ],
     }
 
 
-def review_for(task_dir: Path, subject_path: Path, scenario_ids: list[str]) -> dict:
-    implementation = task_dir / "implementation.md"
+def runner_definition(exit_code: int = 0) -> dict:
     return {
-        "schema_version": 1,
-        "task_sha256": digest(task_dir / "task.md"),
-        "flow_sha256": digest(implementation),
-        "subject_sha256": digest(subject_path),
-        "parent_contract_sha256": "",
-        "runner_config_sha256": digest(
-            task_dir.parent.parent / ".agent-gate" / "scenario-gate.json"
-        ),
-        "reviewed_scenarios": scenario_ids,
-        "verdict": "pass",
-        "blocking_findings": [],
+        "command": [sys.executable, "-c", f"raise SystemExit({exit_code})"],
+        "timeout_seconds": 30,
+        "max_output_bytes": 65536,
     }
 
 
-def write_policy(project: Path, *, mode: str = "enforce", runners: dict | None = None) -> Path:
+def write_policy(project: Path, *, runners: dict | None = None, **legacy: object) -> Path:
     if runners is None:
-        definition = {
-            "command": ["python3", "-c", "raise SystemExit(0)"],
-            "format": "exit-code",
-            "timeout_seconds": 30,
-            "max_output_bytes": 65536,
+        runners = {
+            "ready-check": runner_definition(),
+            "stale-check": runner_definition(),
         }
-        runners = {"integration": definition, "critical": definition}
+    value = {"schema_version": 1, "runners": runners, **legacy}
     path = project / ".agent-gate" / "scenario-gate.json"
-    write_json(path, {"schema_version": 1, "mode": mode, "runners": runners})
+    write_json(path, value)
     return path
 
 
 def write_parent_scenarios(task_dir: Path, contract: dict | None = None) -> Path:
-    value = parent_contract() if contract is None else contract
     contract_path = task_dir / "scenario-contract.json"
-    write_json(contract_path, value)
-    scenario_ids = [item["id"] for item in value.get("scenarios", [])]
-    write_json(
-        task_dir / "scenario-review.json",
-        review_for(task_dir, contract_path, scenario_ids),
-    )
+    write_json(contract_path, parent_contract() if contract is None else contract)
     return contract_path
 
 
-def write_parent_project(project: Path, *, mode: str = "enforce") -> Path:
+def write_parent_project(project: Path, **legacy: object) -> Path:
     task_dir = project / "_workspace" / "parent-task"
     write_ready_artifacts(task_dir)
-    write_policy(project, mode=mode)
+    write_policy(project, **legacy)
     write_parent_scenarios(task_dir)
     return task_dir
 
 
-def write_child_scenarios(parent: Path, child: Path, *, ownership: str = "child") -> Path:
-    contract_path = parent / "scenario-contract.json"
-    overlay = {
-        "schema_version": 1,
-        "parent_task": parent.name,
-        "parent_contract_sha256": digest(contract_path),
-        "inherited_scenarios": ["S-BLOCK-STALE"],
-        "local_scenarios": [
-            {
-                **scenario(
-                    "S-CHILD-LOCAL",
-                    acceptance=["AC-1"],
-                    flow=["P1"],
-                ),
-                "ownership": ownership,
-            }
-        ],
-    }
-    overlay_path = child / "scenario-overlay.json"
-    write_json(overlay_path, overlay)
-    review = {
-        "schema_version": 1,
-        "task_sha256": digest(child / "task.md"),
-        "flow_sha256": digest(parent / "implementation.md"),
-        "subject_sha256": digest(overlay_path),
-        "parent_contract_sha256": digest(contract_path),
-        "runner_config_sha256": digest(
-            child.parent.parent / ".agent-gate" / "scenario-gate.json"
-        ),
-        "reviewed_scenarios": ["S-BLOCK-STALE", "S-CHILD-LOCAL"],
-        "verdict": "pass",
-        "blocking_findings": [],
-    }
-    write_json(child / "scenario-review.json", review)
-    return overlay_path
-
-
-def write_child_project(parent: Path, *, ownership: str = "child") -> Path:
+def write_child_project(parent: Path, **obsolete: object) -> Path:
+    if obsolete:
+        raise TypeError("child scenario overlays are obsolete")
     child = parent.parent / "child-task"
     child.mkdir(parents=True)
     (child / "task.md").write_text(CHILD_TASK, encoding="utf-8")
@@ -156,14 +109,16 @@ def write_child_project(parent: Path, *, ownership: str = "child") -> Path:
         child / "inherited-readiness.json",
         inheritance_for(child, parent_task=parent.name),
     )
-    write_child_scenarios(parent, child, ownership=ownership)
     return child
 
 
 def init_git_project(project: Path) -> None:
     source = project / "src" / "app.txt"
+    verification = project / "tests" / "scenario.txt"
     source.parent.mkdir(parents=True, exist_ok=True)
+    verification.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("initial\n", encoding="utf-8")
+    verification.write_text("assertion\n", encoding="utf-8")
     commands = (
         ["git", "init", "-q"],
         ["git", "config", "user.email", "scenario@example.invalid"],
@@ -173,3 +128,19 @@ def init_git_project(project: Path) -> None:
     )
     for command in commands:
         subprocess.run(command, cwd=project, check=True, capture_output=True, text=True)
+
+
+def write_passing_evidence(task_dir: Path, project: Path) -> Path:
+    scripts = Path(__file__).resolve().parent.parent / "scripts"
+    sys.path.insert(0, str(scripts))
+    from scenario_gate import evidence_template
+
+    value = evidence_template(task_dir, project)
+    for item in value["observations"]:
+        item["implementation"] = [{"path": "src/app.txt", "line": 1}]
+        item["verification"] = [{"path": "tests/scenario.txt", "line": 1}]
+    value["verdict"] = "pass"
+    value["blocking_findings"] = []
+    path = task_dir / "scenario-evidence.json"
+    write_json(path, value)
+    return path

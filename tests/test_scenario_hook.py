@@ -14,6 +14,7 @@ from readiness_helpers import write_ready_artifacts
 from scenario_helpers import (
     init_git_project,
     write_parent_project,
+    write_passing_evidence,
     write_policy,
 )
 
@@ -42,9 +43,7 @@ class ScenarioHookTest(unittest.TestCase):
     def event(self, path: Path | None = None) -> dict:
         value = {"cwd": str(self.project), "session_id": self.session_id}
         if path is not None:
-            value.update(
-                {"tool_name": "Write", "tool_input": {"file_path": str(path)}}
-            )
+            value.update({"tool_name": "Write", "tool_input": {"file_path": str(path)}})
         return value
 
     def run_hook(self, script: Path, event: dict, *args: str) -> subprocess.CompletedProcess[str]:
@@ -75,9 +74,9 @@ class ScenarioHookTest(unittest.TestCase):
             reason = value["reason"]
         self.assertIn(fragment, reason)
 
-    def test_enforce_binds_review_then_blocks_stale_contract_edit(self):
-        task = write_parent_project(self.project, mode="enforce")
-        bound = self.bind(task / "scenario-review.json")
+    def test_contract_binds_then_stale_contract_blocks_protected_edit(self):
+        task = write_parent_project(self.project)
+        bound = self.bind(task / "scenario-contract.json")
         self.assertEqual(bound.stdout.strip(), "", bound.stdout + bound.stderr)
         self.assertTrue(marker_path(self.project).is_file())
         allowed = self.pre(self.project / "src" / "app.py")
@@ -85,31 +84,37 @@ class ScenarioHookTest(unittest.TestCase):
 
         contract = task / "scenario-contract.json"
         contract.write_text(contract.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        # Whitespace is valid JSON, so readiness remains structurally valid.
+        allowed = self.pre(self.project / "src" / "app.py")
+        self.assertEqual(allowed.stdout.strip(), "", allowed.stdout + allowed.stderr)
+
+        value = json.loads(contract.read_text(encoding="utf-8"))
+        value["scenarios"][0]["then"] = []
+        contract.write_text(json.dumps(value), encoding="utf-8")
         self.assert_block(self.pre(self.project / "src" / "app.py"), "scenario")
 
-    def test_enforce_does_not_bind_readiness_without_scenario_proof(self):
+    def test_readiness_without_scenario_contract_does_not_bind(self):
         task = self.project / "_workspace" / "task"
         write_ready_artifacts(task)
-        write_policy(self.project, mode="enforce")
+        write_policy(self.project)
         process = self.bind(task / "assessment.json")
         self.assert_block(process, "scenario")
         self.assertFalse(marker_path(self.project).exists())
 
-    def test_advisory_binds_even_when_scenario_proof_is_missing(self):
-        task = self.project / "_workspace" / "task"
-        write_ready_artifacts(task)
+    def test_invalid_single_policy_blocks_binding(self):
+        task = write_parent_project(self.project)
         write_policy(self.project, mode="advisory")
-        process = self.bind(task / "assessment.json")
-        self.assertEqual(process.stdout.strip(), "", process.stdout + process.stderr)
-        self.assertTrue(marker_path(self.project).is_file())
-        self.assertIn("scenario advisory", process.stderr)
+        process = self.bind(task / "scenario-contract.json")
+        self.assert_block(process, "scenario")
+        self.assertFalse(marker_path(self.project).exists())
 
-    def test_stop_blocks_until_fresh_result_exists(self):
-        task = write_parent_project(self.project, mode="enforce")
-        self.assertEqual(self.bind(task / "scenario-review.json").stdout.strip(), "")
+    def test_stop_blocks_until_current_evidence_and_result_exist(self):
+        task = write_parent_project(self.project)
+        self.assertEqual(self.bind(task / "scenario-contract.json").stdout.strip(), "")
         init_git_project(self.project)
         self.assert_block(self.stop(), "scenario completion")
 
+        write_passing_evidence(task, self.project)
         run = run_scenarios(task, self.project)
         self.assertTrue(run.result_written, run.errors)
         completed = self.stop()

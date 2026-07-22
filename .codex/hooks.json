@@ -1,15 +1,5 @@
 {
   "hooks": {
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/prompt_router.py\" --rules \"$(git rev-parse --show-toplevel)/.claude/skill-rules.json\""
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "compact",

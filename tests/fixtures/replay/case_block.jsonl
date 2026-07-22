@@ -1,2 +1,2 @@
-{"type": "user", "message": {"role": "user", "content": "이 버그 디버깅 해줘"}}
+{"type": "user", "message": {"role": "user", "content": "이 산출물 평가해줘"}}
 {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/x/main.py"}, "id": "t1"}]}}

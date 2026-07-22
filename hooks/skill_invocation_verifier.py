@@ -16,7 +16,6 @@ Rule file schema (JSON):
         "id": "code-edits-need-guardrails",
         "when": {"prompt_pattern": "...", "tool": "Write|Edit", "input_pattern": "\\.go"},
         "require": {"skill": "coding-quality-guardrails"},   # or {"tool_pattern": "^mcp__context7__"}
-                                                             # or {"test_report": "reports/junit.xml"}
         "message": "optional extra guidance"
     }]}
 
@@ -31,7 +30,6 @@ import argparse
 import json
 import re
 import sys
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -94,7 +92,7 @@ def _triggered(rule: dict, prompt: str, turn_calls: list[ToolCall]) -> bool:
     return True
 
 
-def _satisfied(rule: dict, session_calls: list[ToolCall], cwd: str | None) -> bool:
+def _satisfied(rule: dict, session_calls: list[ToolCall]) -> bool:
     require = rule.get("require") or {}
     if not isinstance(require, dict):
         raise ValueError("rule 'require' must be an object")
@@ -106,68 +104,11 @@ def _satisfied(rule: dict, session_calls: list[ToolCall], cwd: str | None) -> bo
         if not isinstance(require["tool_pattern"], str):
             raise ValueError("required tool pattern must be a string")
         return any(re.search(require["tool_pattern"], c.name) for c in session_calls)
-    if "test_report" in require:
-        spec = require["test_report"]
-        if not isinstance(spec, str):
-            raise ValueError("required test_report must be a path string")
-        if cwd is None:
-            note(LABEL, f"test_report rule unverifiable without cwd (audit mode); skipping {spec!r}")
-            return True
-        return _test_report_passing(Path(cwd), spec)
     raise ValueError("rule has no require target")
 
 
-def _test_report_passing(cwd: Path, spec: str) -> bool:
-    """A deterministic external reporter artifact (JUnit XML or JSON) that
-    records zero failures. Missing/unreadable/failing all count as not-passing,
-    so the rule blocks until a green report exists (arXiv/tdd-guard pattern)."""
-    matches = sorted(cwd.glob(spec)) if any(ch in spec for ch in "*?[") else [cwd / spec]
-    saw_report = False
-    for path in matches:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
-            continue
-        verdict = _report_verdict(text)
-        if verdict is None:
-            continue
-        saw_report = True
-        if not verdict:
-            return False
-    return saw_report
-
-
-def _report_verdict(text: str) -> bool | None:
-    """True=green, False=has failures, None=not a recognized report."""
-    if text.lstrip().startswith("{"):
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return None
-        summary = data.get("summary")
-        if not isinstance(summary, dict):
-            summary = data if isinstance(data, dict) else {}
-        failed = summary.get("failed", summary.get("failures"))
-        if failed is None:
-            return None
-        return int(failed) == 0 and int(summary.get("errors") or 0) == 0
-    try:
-        root = ET.fromstring(text)
-        seen = False
-        total = 0
-        for suite in list(root.iter("testsuite")) or [root]:
-            for key in ("failures", "errors"):
-                value = suite.get(key)
-                if value is not None:
-                    seen = True
-                    total += int(value)
-    except (ET.ParseError, ValueError):
-        return None
-    return (total == 0) if seen else None
-
-
 def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
-             session_calls: list[ToolCall], cwd: str | None = None) -> list[Violation]:
+             session_calls: list[ToolCall]) -> list[Violation]:
     if prompt is None:
         return []
     violations = []
@@ -179,7 +120,7 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
         try:
             if not _triggered(rule, prompt, turn_calls):
                 continue
-            if _satisfied(rule, session_calls, cwd):
+            if _satisfied(rule, session_calls):
                 continue
         except (TypeError, ValueError, re.error) as exc:
             note(LABEL, f"skipping rule '{rule_id}': {exc}")
@@ -187,8 +128,6 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
         require = rule.get("require") or {}
         if "skill" in require:
             guidance = f"invoke Skill({require['skill']})"
-        elif "test_report" in require:
-            guidance = f"make all tests pass and write the report to {require['test_report']!r}"
         else:
             guidance = f"call a tool matching {require['tool_pattern']!r}"
         if rule.get("message"):
@@ -197,32 +136,10 @@ def evaluate(rules: list[dict], prompt: str | None, turn_calls: list[ToolCall],
     return violations
 
 
-def routed_skill_hints(rules: list[dict], prompt: str) -> list[tuple[str, str]]:
-    """(rule_id, skill) for skill-requiring rules that the prompt alone already
-    triggers. Tool-gated rules are excluded — no tool calls exist yet at
-    prompt-submit time. Used by the proactive UserPromptSubmit router."""
-    hints = []
-    for rule in rules:
-        if not isinstance(rule, dict):
-            continue
-        rule_id = str(rule.get("id", "unnamed-rule"))
-        try:
-            if not _triggered(rule, prompt, []):
-                continue
-        except (TypeError, ValueError, re.error) as exc:
-            note(LABEL, f"skipping rule '{rule_id}': {exc}")
-            continue
-        require = rule.get("require") or {}
-        skill = require.get("skill") if isinstance(require, dict) else None
-        if isinstance(skill, str):
-            hints.append((rule_id, skill))
-    return hints
-
-
-def evaluate_transcript(rules: list[dict], entries: list[dict], cwd: str | None = None) -> list[Violation]:
+def evaluate_transcript(rules: list[dict], entries: list[dict]) -> list[Violation]:
     """Single composition of the verifier pipeline, shared by the hook, the
     audit --check mode, and the replay harness so all three run the same path."""
-    return evaluate(rules, *collect(entries), cwd=cwd)
+    return evaluate(rules, *collect(entries))
 
 
 def load_rules(rules_arg: str | None, cwd: str | None) -> list[dict] | None:
@@ -258,7 +175,7 @@ def _run_hook(hook_input: dict, rules_arg: str | None) -> int:
     if not rules:
         return 0
     entries = parse_transcript(Path(hook_input.get("transcript_path")))
-    violations = evaluate_transcript(rules, entries, cwd=hook_input.get("cwd"))
+    violations = evaluate_transcript(rules, entries)
     if not violations:
         return 0
     lines = [f"rule '{v.rule_id}': {v.guidance}" for v in violations]

@@ -32,13 +32,6 @@ CONTEXT7_RULE = {
     "when": {"prompt_pattern": r"(?i)library docs"},
     "require": {"tool_pattern": r"^mcp__context7__"},
 }
-TEST_REPORT_RULE = {
-    "id": "code-edit-needs-green-tests",
-    "when": {"tool": "Write|Edit", "input_pattern": r"\.py"},
-    "require": {"test_report": "junit.xml"},
-}
-
-
 class VerifierHarness(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
@@ -101,35 +94,18 @@ class TestVerifier(VerifierHarness):
         ])
         self.assert_passed(self.run_hook(self.hook_input()))
 
-    def test_b11_passing_junit_report_satisfies(self):
-        self.write_rules([TEST_REPORT_RULE])
-        (self.dir / "junit.xml").write_text(
-            '<testsuite tests="3" failures="0" errors="0"></testsuite>', encoding="utf-8")
+    def test_unsupported_test_report_rule_is_skipped_with_diagnostic(self):
+        rule = {
+            "id": "legacy-test-report",
+            "when": {"tool": "Write|Edit", "input_pattern": r"\.py"},
+            "require": {"test_report": "junit.xml"},
+        }
+        self.write_rules([rule])
         self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
                                write_call("app.py")])
-        self.assert_passed(self.run_hook(self.hook_input()))
-
-    def test_b11_failing_junit_report_blocks(self):
-        self.write_rules([TEST_REPORT_RULE])
-        (self.dir / "junit.xml").write_text(
-            '<testsuite tests="3" failures="1" errors="0"></testsuite>', encoding="utf-8")
-        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
-                               write_call("app.py")])
-        self.assert_blocked(self.run_hook(self.hook_input()), "junit.xml")
-
-    def test_b11_missing_report_blocks(self):
-        self.write_rules([TEST_REPORT_RULE])
-        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
-                               write_call("app.py")])
-        self.assert_blocked(self.run_hook(self.hook_input()), "junit.xml")
-
-    def test_b11_passing_json_report_satisfies(self):
-        self.write_rules([TEST_REPORT_RULE])
-        (self.dir / "junit.xml").write_text(
-            '{"summary": {"passed": 5, "failed": 0}}', encoding="utf-8")
-        self.write_transcript([user_text("코드 고치고 테스트 돌려줘"),
-                               write_call("app.py")])
-        self.assert_passed(self.run_hook(self.hook_input()))
+        proc = self.run_hook(self.hook_input())
+        self.assert_passed(proc)
+        self.assertIn("rule has no require target", proc.stderr)
 
     def test_t3_stop_hook_active_with_missing_skill_still_blocks(self):
         self.write_rules([DEBUG_RULE])
@@ -221,20 +197,24 @@ class TestVerifier(VerifierHarness):
         self.write_transcript([user_text("디버깅 해줘")])
         self.assert_passed(self.run_hook(self.hook_input()))
 
-    def test_t13_project_rules_require_flow_design_for_implementation_edit(self):
+    def test_t13_project_rules_leave_flow_skill_selection_to_the_model(self):
         self.rules_path = PROJECT_RULES
         self.write_transcript([
             user_text("설계 문서를 작성해줘"),
             write_call("/project/_workspace/change/implementation.md"),
         ])
-        self.assert_blocked(self.run_hook(self.hook_input()), "flow-design")
+        self.assert_passed(self.run_hook(self.hook_input()))
 
-    def test_t14_flow_design_invocation_satisfies_implementation_edit_rule(self):
+    def test_t14_project_rules_require_artifact_judge_for_artifact_scoring(self):
+        self.rules_path = PROJECT_RULES
+        self.write_transcript([user_text("이 산출물 평가해줘")])
+        self.assert_blocked(self.run_hook(self.hook_input()), "artifact-judge")
+
+    def test_t15_artifact_judge_satisfies_artifact_scoring_rule(self):
         self.rules_path = PROJECT_RULES
         self.write_transcript([
-            user_text("설계 문서를 작성해줘"),
-            tool_use("Skill", {"skill": "flow-design"}),
-            write_call("/project/_workspace/change/implementation.md"),
+            user_text("이 산출물 평가해줘"),
+            tool_use("Skill", {"skill": "artifact-judge"}),
         ])
         self.assert_passed(self.run_hook(self.hook_input()))
 
