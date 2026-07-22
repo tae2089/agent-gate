@@ -53,6 +53,10 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/context_watermark.py\""
+          },
+          {
+            "type": "command",
+            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/scenario_gate_hook.py\""
           }
         ]
       }

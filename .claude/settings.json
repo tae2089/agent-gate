@@ -35,6 +35,11 @@
               "--window",
               "1000000"
             ]
+          },
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/hooks/scenario_gate_hook.py"]
           }
         ]
       }

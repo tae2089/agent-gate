@@ -88,6 +88,27 @@ class TestHookConfig(unittest.TestCase):
         self.assertRegex('"/project/_workspace/change/implementation.md"',
                          matches[0]["when"]["input_pattern"])
 
+    def test_all_hosts_wire_scenario_completion_stop_hook(self):
+        claude_files = ("hooks/hooks.json", ".claude/settings.json")
+        for relative in claude_files:
+            with self.subTest(relative=relative):
+                commands = [
+                    hook.get("command", "") + " " + " ".join(hook.get("args", []))
+                    for group in self.load(relative)["hooks"]["Stop"]
+                    for hook in group.get("hooks", [])
+                ]
+                self.assertTrue(any("scenario_gate_hook.py" in command for command in commands))
+
+        codex = self.load(".codex/hooks.json")["hooks"]["Stop"]
+        codex_commands = [
+            hook["command"] for group in codex for hook in group.get("hooks", [])
+        ]
+        self.assertTrue(any("scenario_gate_hook.py" in command for command in codex_commands))
+
+        for relative in ("hooks.json", ".agents/hooks.json"):
+            commands = [item["command"] for item in self.load(relative)["agent-gate"]["Stop"]]
+            self.assertTrue(any("scenario_gate_hook.py" in command for command in commands))
+
 
 if __name__ == "__main__":
     unittest.main()

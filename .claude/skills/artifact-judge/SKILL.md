@@ -1,6 +1,6 @@
 ---
 name: artifact-judge
-description: Score an agent artifact's semantic quality with an independent LLM judge, certify task.md plus implementation.md before source editing, or bind a decomposed child to a ready Full parent. Use for artifact evaluation, vague task/spec checks, handoff scoring, readiness assessment generation, and inherited child readiness. Not for reviewing code.
+description: Score an agent artifact's semantic quality with an independent LLM judge, certify task.md plus implementation.md, review scenario-contract.json or scenario-overlay.json before source editing, or bind a decomposed child to a ready Full parent. Use for artifact evaluation, readiness assessment, scenario-review.json generation, and inherited child readiness. Not for reviewing code.
 ---
 
 # Artifact Judge
@@ -10,8 +10,19 @@ for one LLM judgment only when the artifact passes it. The judge must be an
 independent context — never the session that wrote the artifact.
 
 Route Full `task.md` + `implementation.md` readiness and inherited child
-readiness to `docs/readiness-assessment.md`. Route every other artifact to
+readiness to `docs/readiness-assessment.md`. Route scenario contract/overlay
+review to `docs/scenario-assessment.md`. Route every other artifact to
 `docs/rubric-judge.md`. Read only the selected reference.
+
+## Scenario Review Procedure
+
+1. **Resolve the subject.** Identify one parent `scenario-contract.json` or child `scenario-overlay.json`, its task directory, project root, task Contract/AC, and the direct Full parent's Pseudocode. Done when: every exact path is known.
+2. **Run deterministic preflight.** Run `scripts/scenario_gate.py review-template <task-dir> --project-root <root>`. Stop on schema, reference, scope, runner, parent, or hash errors. Done when: one current JSON template is captured.
+3. **Judge independently.** Launch a fresh context with only the source sections, scenario subject, template, and prompt from `docs/scenario-assessment.md`. Require JSON only; never include implementation code, authoring conversation, or successful runner logs. Done when: a JSON reply is captured.
+4. **Write the bound review.** Write the unchanged hashes and reviewed ID set plus the independent verdict to `<task-dir>/scenario-review.json`. Never change expected outcomes merely to obtain pass. Done when: the file exists.
+5. **Validate.** Run `scripts/scenario_gate.py readiness <task-dir> --project-root <root>`. On failure, fix the named semantic or structural gap and restart at template generation. Done when: the command exits 0.
+
+Stop after this procedure for scenario review. Execution success belongs to the configured project runner and deterministic completion gate, not the judge.
 
 ## Inherited Child Procedure
 

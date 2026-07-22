@@ -19,6 +19,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from readiness_gate import INHERITANCE_FILENAME, validate_task_dir  # noqa: E402
+from scenario_gate import (  # noqa: E402
+    REVIEW_FILENAME as SCENARIO_REVIEW_FILENAME,
+    validate_readiness as validate_scenario_readiness,
+)
 from readiness_state import load_binding, project_relative, record_binding  # noqa: E402
 from transcript import note, read_hook_input, run_fail_open  # noqa: E402
 
@@ -156,6 +160,12 @@ def _enforce_guarded_edit(root: Path, event: dict[str, Any]) -> int:
             return _pretool_block(
                 f"bound task is not ready: {_not_ready_reason(result)}"
             )
+        scenario = validate_scenario_readiness(task_dir, root)
+        if scenario.enabled and not scenario.allowed:
+            reason = "; ".join(scenario.errors[:3]) or "scenario proof is not ready"
+            return _pretool_block(f"bound scenario proof is not ready: {reason}")
+        if scenario.warnings:
+            note(LABEL, "scenario advisory: " + "; ".join(scenario.warnings[:3]))
         return 0
     except Exception as exc:
         return _pretool_block(
@@ -201,7 +211,8 @@ def _readiness_task(root: Path, raw_path: str) -> Path | None:
         or parts[0] != "_workspace"
         or not parts[1]
         or parts[1].startswith(".")
-        or parts[2] not in ("assessment.json", INHERITANCE_FILENAME)
+        or parts[2]
+        not in ("assessment.json", INHERITANCE_FILENAME, SCENARIO_REVIEW_FILENAME)
     ):
         return None
     task_dir = root / Path(*parts[:2])
@@ -226,6 +237,12 @@ def run_bind(event: dict[str, Any]) -> int:
             continue
         result = validate_task_dir(task_dir)
         if result.ready:
+            scenario = validate_scenario_readiness(task_dir, root)
+            if scenario.enabled and not scenario.allowed:
+                reason = "; ".join(scenario.errors[:3]) or "scenario proof is not ready"
+                return _block(f"scenario proof is not ready: {reason}")
+            if scenario.warnings:
+                note(LABEL, "scenario advisory: " + "; ".join(scenario.warnings[:3]))
             record_binding(root, session_id, task_dir)
             return 0
         label = (

@@ -22,6 +22,25 @@ class TestSkillPackaging(unittest.TestCase):
         self.assertIn("inherited-readiness.json", skill)
         self.assertIn("--inherit-from", skill)
 
+    def test_scenario_design_is_shared_and_has_bounded_completion_criteria(self):
+        canonical = ROOT / ".claude" / "skills" / "scenario-design"
+        codex_entry = ROOT / ".agents" / "skills" / "scenario-design"
+        self.assertTrue(codex_entry.is_symlink(), codex_entry)
+        self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
+        skill = (canonical / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("scenario-contract.json", skill)
+        self.assertIn("scenario-overlay.json", skill)
+        self.assertIn("3-5", skill)
+        self.assertIn("Completion Criteria", skill)
+
+    def test_artifact_judge_routes_scenario_review_to_dedicated_procedure(self):
+        skill = (ROOT / ".claude" / "skills" / "artifact-judge" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("scenario-review.json", skill)
+        self.assertIn("docs/scenario-assessment.md", skill)
+        self.assertTrue((ROOT / "docs" / "scenario-assessment.md").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

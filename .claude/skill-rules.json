@@ -50,6 +50,24 @@
       "message": "Full-tier implementation design requires numbered pseudocode and a control-flow Mermaid diagram"
     },
     {
+      "id": "scenario-contract-edits-need-scenario-design",
+      "when": {
+        "tool": "Write|Edit",
+        "input_pattern": "scenario-(contract|overlay)\\.json\""
+      },
+      "require": { "skill": "scenario-design" },
+      "message": "scenario contracts must be derived from AC/P flow through scenario-design"
+    },
+    {
+      "id": "scenario-review-edits-need-artifact-judge",
+      "when": {
+        "tool": "Write|Edit",
+        "input_pattern": "scenario-review\\.json\""
+      },
+      "require": { "skill": "artifact-judge" },
+      "message": "scenario-review.json must come from an independent artifact-judge procedure"
+    },
+    {
       "id": "dispatch-packet-needs-execute-dispatch-unit",
       "when": {
         "prompt_pattern": "(unit_id|allowed_scope|return_contract|acceptance_criteria)"

@@ -16,6 +16,8 @@ never lock an Antigravity session — the same policy the hooks themselves use.
 
 Antigravity coverage (measured against transcript_full.jsonl, codex-cli-style):
 - readiness (Pre/PostToolUse): supported — the tool call is normalized here.
+- scenario completion (Stop): supported — the bound task and normalized
+  workspace/session fields are passed to the deterministic completion hook.
 - verifier (Stop): supported — transcript.py normalizes Antigravity lines and
   reads skill use from a view_file with args.IsSkillFile.
 - reinject: supported via PreInvocation — see antigravity_reinject.py, which
