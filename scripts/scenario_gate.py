@@ -18,7 +18,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,13 +33,12 @@ RESULT_FILENAME = "scenario-result.json"
 MODES = frozenset({"advisory", "critical-enforce", "enforce"})
 RISKS = frozenset({"standard", "critical"})
 LEVELS = frozenset({"in-process", "integration", "e2e"})
-REPORT_FORMATS = frozenset({"exit-code", "agent-gate-json", "junit-xml"})
 SAFE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 SCENARIO_ID = re.compile(r"S-[A-Z0-9][A-Z0-9-]*")
 
 CONFIG_FIELDS = frozenset({"schema_version", "mode", "runners"})
 RUNNER_FIELDS = frozenset(
-    {"command", "format", "report_path", "timeout_seconds", "max_output_bytes"}
+    {"command", "format", "timeout_seconds", "max_output_bytes"}
 )
 CONTRACT_FIELDS = frozenset({"schema_version", "scenarios"})
 SCENARIO_FIELDS = frozenset(
@@ -67,7 +65,6 @@ RESULT_FIELDS = frozenset(
         "results",
     }
 )
-REPORT_FIELDS = frozenset({"schema_version", "results"})
 RESULT_ITEM_FIELDS = frozenset({"id", "status", "duration_ms", "reason"})
 RESULT_STATUSES = frozenset({"passed", "failed", "infrastructure-error"})
 SAFE_ENVIRONMENT = frozenset(
@@ -116,8 +113,6 @@ class ScenarioGateResult:
 @dataclass(frozen=True)
 class RunnerDefinition:
     command: tuple[str, ...]
-    report_format: str
-    report_path: str | None
     timeout_seconds: int
     max_output_bytes: int
 
@@ -134,6 +129,14 @@ class ScenarioRunResult:
     result_written: bool
     errors: tuple[str, ...]
     result_path: Path | None
+
+
+@dataclass(frozen=True)
+class _ResolvedScenarioSet:
+    scenarios: tuple[dict[str, Any], ...]
+    flow_path: Path
+    subject_content: bytes | None
+    parent_contract_sha256: str
 
 
 def _sha256(content: bytes) -> str:
@@ -180,22 +183,6 @@ def _load_json(path: Path, label: str, errors: list[str]) -> tuple[dict[str, Any
         errors.append(f"{label} must contain a JSON object")
         return None
     return value, content
-
-
-def _safe_relative_path(value: Any, label: str, errors: list[str]) -> str | None:
-    if not isinstance(value, str) or not value or value != value.strip():
-        errors.append(f"{label} must be a non-empty project-relative path")
-        return None
-    path = Path(value)
-    if (
-        path in (Path("."), Path(""))
-        or path.is_absolute()
-        or ".." in path.parts
-        or path.parts[:1] in ((".git",), ("_workspace",))
-    ):
-        errors.append(f"{label} must stay outside reserved paths and inside the project")
-        return None
-    return path.as_posix()
 
 
 def _bounded_int(value: Any, default: int, minimum: int, maximum: int, label: str, errors: list[str]) -> int:
@@ -253,25 +240,10 @@ def load_policy(project_root: Path | str) -> tuple[ScenarioPolicy | None, tuple[
             command_value: tuple[str, ...] = ()
         else:
             command_value = tuple(command)
-        report_format = runner.get("format")
-        if report_format not in REPORT_FORMATS:
-            errors.append(f"runner {name}.format must be one of {sorted(REPORT_FORMATS)}")
-            report_format = "exit-code"
-        raw_report_path = runner.get("report_path")
-        report_path = None
-        if report_format == "exit-code":
-            if raw_report_path is not None:
-                errors.append(f"runner {name}.report_path is forbidden for exit-code")
-        elif raw_report_path is None:
-            errors.append(f"runner {name}.report_path is required for {report_format}")
-        else:
-            report_path = _safe_relative_path(
-                raw_report_path, f"runner {name}.report_path", errors
-            )
+        if runner.get("format") != "exit-code":
+            errors.append(f"runner {name}.format must be one of ['exit-code']")
         runners[name] = RunnerDefinition(
             command=command_value,
-            report_format=report_format,
-            report_path=report_path,
             timeout_seconds=_bounded_int(
                 runner.get("timeout_seconds"), 300, 1, 3600, f"runner {name}.timeout_seconds", errors
             ),
@@ -478,12 +450,12 @@ def _child_scenarios(
     errors: list[str],
     *,
     validate_subject_review: bool = True,
-) -> tuple[tuple[dict[str, Any], ...], bytes | None]:
+) -> _ResolvedScenarioSet | None:
     inheritance_loaded = _load_json(
         child / INHERITANCE_FILENAME, INHERITANCE_FILENAME, errors
     )
     if inheritance_loaded is None:
-        return (), None
+        return None
     inheritance, _ = inheritance_loaded
     parent_name = inheritance.get("parent_task")
     if (
@@ -492,14 +464,14 @@ def _child_scenarios(
         or parent_name.startswith(".")
     ):
         errors.append("child scenario parent_task is unsafe")
-        return (), None
+        return None
     parent = child.parent / parent_name
     try:
         if parent.is_symlink() or not parent.resolve(strict=True).is_dir():
             raise OSError("not a direct directory")
     except (OSError, RuntimeError) as exc:
         errors.append(f"cannot resolve child scenario parent: {exc}")
-        return (), None
+        return None
 
     parent_scenarios, parent_content = _parent_contract(parent, policy, errors)
     _validate_review(
@@ -512,7 +484,7 @@ def _child_scenarios(
     )
     overlay_loaded = _load_json(child / OVERLAY_FILENAME, OVERLAY_FILENAME, errors)
     if overlay_loaded is None:
-        return (), None
+        return None
     overlay, overlay_content = overlay_loaded
     _unknown_fields(overlay, OVERLAY_FIELDS, "scenario overlay", errors)
     if overlay.get("schema_version") != SCHEMA_VERSION:
@@ -581,25 +553,32 @@ def _child_scenarios(
             parent_sha256,
             errors,
         )
-    return tuple(effective), overlay_content
+    return _ResolvedScenarioSet(
+        scenarios=tuple(effective),
+        flow_path=parent / "implementation.md",
+        subject_content=overlay_content,
+        parent_contract_sha256=parent_sha256,
+    )
 
 
-def _effective_scenarios(
+def _resolve_scenario_set(
     task: Path,
     policy: ScenarioPolicy,
     errors: list[str],
     *,
     validate_review_artifact: bool = True,
-) -> tuple[dict[str, Any], ...]:
+) -> _ResolvedScenarioSet:
     inherited = task / INHERITANCE_FILENAME
     if inherited.is_symlink() or inherited.exists():
-        scenarios, _ = _child_scenarios(
+        resolved = _child_scenarios(
             task,
             policy,
             errors,
             validate_subject_review=validate_review_artifact,
         )
-        return scenarios
+        if resolved is not None:
+            return resolved
+        return _ResolvedScenarioSet((), task / "implementation.md", None, "")
     scenarios, contract_content = _parent_contract(task, policy, errors)
     if validate_review_artifact:
         _validate_review(
@@ -610,7 +589,12 @@ def _effective_scenarios(
             "",
             errors,
         )
-    return scenarios
+    return _ResolvedScenarioSet(
+        scenarios=scenarios,
+        flow_path=task / "implementation.md",
+        subject_content=contract_content,
+        parent_contract_sha256="",
+    )
 
 
 def _project_task_dir(
@@ -655,7 +639,7 @@ def validate_readiness(task_dir: Path | str, project_root: Path | str) -> Scenar
     readiness = validate_task_dir(task)
     if not readiness.ready:
         errors.extend(f"task readiness: {error}" for error in readiness.errors)
-    scenarios = _effective_scenarios(task, policy, errors)
+    scenarios = _resolve_scenario_set(task, policy, errors).scenarios
     all_ids = tuple(
         scenario["id"] for scenario in scenarios if isinstance(scenario.get("id"), str)
     )
@@ -678,28 +662,6 @@ def validate_readiness(task_dir: Path | str, project_root: Path | str) -> Scenar
         (),
         required,
     )
-
-
-def _project_report_path(root: Path, relative: str, errors: list[str]) -> Path | None:
-    path = root / relative
-    try:
-        if path.is_symlink():
-            errors.append(f"runner report_path must not be a symlink: {relative}")
-            return None
-        cursor = root
-        for part in Path(relative).parent.parts:
-            cursor = cursor / part
-            if cursor.is_symlink():
-                errors.append(
-                    f"runner report_path parent must not be a symlink: {relative}"
-                )
-                return None
-        parent = path.parent.resolve(strict=True)
-        parent.relative_to(root.resolve(strict=True))
-    except (OSError, RuntimeError, ValueError) as exc:
-        errors.append(f"runner report_path is unsafe: {relative}: {exc}")
-        return None
-    return path
 
 
 def _infrastructure_results(
@@ -729,40 +691,39 @@ def _kill_runner(process: subprocess.Popen[Any]) -> None:
     process.wait()
 
 
-def _parse_result_items(
-    raw: Any, expected_ids: tuple[str, ...], errors: list[str]
-) -> list[dict[str, Any]]:
+def _stored_results(
+    raw: Any,
+    effective_ids: tuple[str, ...],
+    errors: list[str],
+) -> dict[str, dict[str, Any]]:
     if not isinstance(raw, list):
-        errors.append("runner report results must be a list")
-        return []
+        errors.append("scenario result results must be a list")
+        return {}
     by_id: dict[str, dict[str, Any]] = {}
     for index, value in enumerate(raw):
-        item = _object(value, f"runner result[{index}]", errors)
+        item = _object(value, f"scenario result[{index}]", errors)
         unknown = sorted(item.keys() - RESULT_ITEM_FIELDS)
         missing = sorted({"id", "status", "duration_ms"} - item.keys())
         if unknown:
-            errors.append(f"runner result[{index}] has unknown fields: {', '.join(unknown)}")
+            errors.append(f"scenario result[{index}] has unknown fields: {', '.join(unknown)}")
         if missing:
-            errors.append(f"runner result[{index}] is missing fields: {', '.join(missing)}")
+            errors.append(f"scenario result[{index}] is missing fields: {', '.join(missing)}")
         scenario_id = item.get("id")
-        if not isinstance(scenario_id, str) or SCENARIO_ID.fullmatch(scenario_id) is None:
-            errors.append(f"runner result[{index}].id is invalid")
+        if not isinstance(scenario_id, str) or scenario_id not in effective_ids:
+            errors.append(f"scenario result[{index}].id is not an effective scenario")
             continue
         if scenario_id in by_id:
-            errors.append(f"runner report has duplicate scenario id: {scenario_id}")
-            continue
-        if scenario_id not in expected_ids:
-            errors.append(f"runner report has unknown scenario id: {scenario_id}")
+            errors.append(f"scenario result has duplicate scenario id: {scenario_id}")
             continue
         status = item.get("status")
         if status not in RESULT_STATUSES:
-            errors.append(f"runner result {scenario_id}.status is invalid")
+            errors.append(f"scenario result {scenario_id}.status is invalid")
         duration = item.get("duration_ms")
         if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
-            errors.append(f"runner result {scenario_id}.duration_ms must be non-negative")
+            errors.append(f"scenario result {scenario_id}.duration_ms must be non-negative")
         reason = item.get("reason")
         if reason is not None and not isinstance(reason, str):
-            errors.append(f"runner result {scenario_id}.reason must be a string")
+            errors.append(f"scenario result {scenario_id}.reason must be a string")
         normalized = {
             "id": scenario_id,
             "status": status,
@@ -771,65 +732,7 @@ def _parse_result_items(
         if isinstance(reason, str) and reason:
             normalized["reason"] = reason
         by_id[scenario_id] = normalized
-    missing_ids = [scenario_id for scenario_id in expected_ids if scenario_id not in by_id]
-    if missing_ids:
-        errors.append(f"runner report is missing scenario ids: {', '.join(missing_ids)}")
-    return [by_id[scenario_id] for scenario_id in expected_ids if scenario_id in by_id]
-
-
-def _parse_agent_gate_report(
-    content: bytes, expected_ids: tuple[str, ...], errors: list[str]
-) -> list[dict[str, Any]]:
-    try:
-        value = json.loads(content.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
-        errors.append(f"cannot parse agent-gate-json report: {exc}")
-        return []
-    report = _object(value, "agent-gate-json report", errors)
-    _unknown_fields(report, REPORT_FIELDS, "agent-gate-json report", errors)
-    if report.get("schema_version") != SCHEMA_VERSION:
-        errors.append(f"agent-gate-json report schema_version must be {SCHEMA_VERSION}")
-    return _parse_result_items(report.get("results"), expected_ids, errors)
-
-
-def _parse_junit_report(
-    content: bytes, expected_ids: tuple[str, ...], errors: list[str]
-) -> list[dict[str, Any]]:
-    try:
-        root = ET.fromstring(content)
-    except ET.ParseError as exc:
-        errors.append(f"cannot parse junit-xml report: {exc}")
-        return []
-    raw_results: list[dict[str, Any]] = []
-    for testcase in root.iter("testcase"):
-        scenario_id = testcase.get("name", "")
-        try:
-            duration_ms = max(0, round(float(testcase.get("time", "0")) * 1000))
-        except ValueError:
-            errors.append(f"junit testcase {scenario_id!r} has invalid time")
-            duration_ms = 0
-        failure = testcase.find("failure")
-        error = testcase.find("error")
-        skipped = testcase.find("skipped")
-        if failure is not None or error is not None:
-            node = failure if failure is not None else error
-            status = "failed"
-            reason = (node.get("message") or node.text or "junit failure").strip()
-        elif skipped is not None:
-            status = "infrastructure-error"
-            reason = (skipped.get("message") or skipped.text or "junit testcase skipped").strip()
-        else:
-            status = "passed"
-            reason = ""
-        item: dict[str, Any] = {
-            "id": scenario_id,
-            "status": status,
-            "duration_ms": duration_ms,
-        }
-        if reason:
-            item["reason"] = reason
-        raw_results.append(item)
-    return _parse_result_items(raw_results, expected_ids, errors)
+    return by_id
 
 
 def _execute_runner(
@@ -837,30 +740,6 @@ def _execute_runner(
     definition: RunnerDefinition,
     scenario_ids: tuple[str, ...],
 ) -> tuple[list[dict[str, Any]], tuple[str, ...]]:
-    errors: list[str] = []
-    report_path = None
-    if definition.report_path is not None:
-        report_path = _project_report_path(root, definition.report_path, errors)
-        if report_path is None:
-            return _infrastructure_results(scenario_ids, errors[0], 0), tuple(errors)
-        tracked, tracked_error = _git_path_is_tracked(root, definition.report_path)
-        if tracked_error is not None:
-            return (
-                _infrastructure_results(scenario_ids, tracked_error, 0),
-                (tracked_error,),
-            )
-        if tracked:
-            reason = (
-                "runner report_path is tracked and will not be replaced: "
-                f"{definition.report_path}"
-            )
-            return _infrastructure_results(scenario_ids, reason, 0), (reason,)
-        try:
-            report_path.unlink(missing_ok=True)
-        except OSError as exc:
-            reason = f"cannot clear stale runner report: {exc}"
-            return _infrastructure_results(scenario_ids, reason, 0), (reason,)
-
     environment = {key: value for key, value in os.environ.items() if key in SAFE_ENVIRONMENT}
     started = time.monotonic()
     timed_out = False
@@ -910,38 +789,14 @@ def _execute_runner(
     if output_exceeded or output_size > definition.max_output_bytes:
         reason = f"runner output exceeded {definition.max_output_bytes} bytes"
         return _infrastructure_results(scenario_ids, reason, duration_ms), (reason,)
-    if definition.report_format == "exit-code":
-        status = "passed" if return_code == 0 else "failed"
-        results = [
-            {"id": scenario_id, "status": status, "duration_ms": duration_ms}
-            for scenario_id in scenario_ids
-        ]
-        if return_code != 0:
-            for result in results:
-                result["reason"] = f"runner exited with code {return_code}"
-        return results, ()
-
-    if report_path is None:
-        reason = "runner report path is unavailable"
-        return _infrastructure_results(scenario_ids, reason, duration_ms), (reason,)
-    try:
-        if report_path.is_symlink():
-            raise OSError("report is a symlink")
-        content = report_path.read_bytes()
-    except OSError as exc:
-        reason = f"cannot read fresh runner report: {exc}"
-        return _infrastructure_results(scenario_ids, reason, duration_ms), (reason,)
-    if len(content) > definition.max_output_bytes:
-        reason = f"runner report exceeded {definition.max_output_bytes} bytes"
-        return _infrastructure_results(scenario_ids, reason, duration_ms), (reason,)
-    parse_errors: list[str] = []
-    if definition.report_format == "agent-gate-json":
-        results = _parse_agent_gate_report(content, scenario_ids, parse_errors)
-    else:
-        results = _parse_junit_report(content, scenario_ids, parse_errors)
-    if parse_errors:
-        reason = "; ".join(parse_errors[:3])
-        return _infrastructure_results(scenario_ids, reason, duration_ms), tuple(parse_errors)
+    status = "passed" if return_code == 0 else "failed"
+    results = [
+        {"id": scenario_id, "status": status, "duration_ms": duration_ms}
+        for scenario_id in scenario_ids
+    ]
+    if return_code != 0:
+        for result in results:
+            result["reason"] = f"runner exited with code {return_code}"
     return results, ()
 
 
@@ -998,41 +853,7 @@ def _git_output(root: Path, arguments: tuple[str, ...]) -> tuple[bytes | None, s
     return content, None
 
 
-def _git_path_is_tracked(root: Path, relative_path: str) -> tuple[bool | None, str | None]:
-    try:
-        process = subprocess.Popen(
-            (
-                "git",
-                "-C",
-                str(root),
-                "ls-files",
-                "--error-unmatch",
-                "--",
-                relative_path,
-            ),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            shell=False,
-        )
-        try:
-            return_code = process.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-            return None, f"git tracked-path check timed out: {relative_path}"
-    except OSError as exc:
-        return None, f"cannot inspect tracked runner report path: {exc}"
-    if return_code == 0:
-        return True, None
-    if return_code == 1:
-        return False, None
-    return None, (
-        f"git tracked-path check failed with code {return_code}: {relative_path}"
-    )
-
-
-def _source_fingerprint(root: Path, policy: ScenarioPolicy) -> tuple[str | None, tuple[str, ...]]:
+def _source_fingerprint(root: Path) -> tuple[str | None, tuple[str, ...]]:
     errors: list[str] = []
     head, error = _git_output(root, ("rev-parse", "HEAD"))
     if error:
@@ -1050,10 +871,6 @@ def _source_fingerprint(root: Path, policy: ScenarioPolicy) -> tuple[str | None,
     if errors or head is None or tracked_diff is None or untracked is None:
         return None, tuple(errors)
 
-    excluded = {CONFIG_RELATIVE.as_posix() + ".result"}
-    for definition in policy.runners.values():
-        if definition.report_path is not None:
-            excluded.add(definition.report_path)
     digest = hashlib.sha256()
     digest.update(b"HEAD\0")
     digest.update(head)
@@ -1067,7 +884,6 @@ def _source_fingerprint(root: Path, policy: ScenarioPolicy) -> tuple[str | None,
             relative.is_absolute()
             or ".." in relative.parts
             or relative.parts[:1] in ((".git",), ("_workspace",))
-            or relative.as_posix() in excluded
         ):
             continue
         path = root / relative
@@ -1087,42 +903,6 @@ def _source_fingerprint(root: Path, policy: ScenarioPolicy) -> tuple[str | None,
     return digest.hexdigest(), ()
 
 
-def _stored_results(
-    raw: Any,
-    effective_ids: tuple[str, ...],
-    errors: list[str],
-) -> dict[str, dict[str, Any]]:
-    if not isinstance(raw, list):
-        errors.append("scenario result results must be a list")
-        return {}
-    by_id: dict[str, dict[str, Any]] = {}
-    for index, value in enumerate(raw):
-        item = _object(value, f"scenario result[{index}]", errors)
-        unknown = sorted(item.keys() - RESULT_ITEM_FIELDS)
-        missing = sorted({"id", "status", "duration_ms"} - item.keys())
-        if unknown:
-            errors.append(f"scenario result[{index}] has unknown fields: {', '.join(unknown)}")
-        if missing:
-            errors.append(f"scenario result[{index}] is missing fields: {', '.join(missing)}")
-        scenario_id = item.get("id")
-        if not isinstance(scenario_id, str) or scenario_id not in effective_ids:
-            errors.append(f"scenario result[{index}].id is not an effective scenario")
-            continue
-        if scenario_id in by_id:
-            errors.append(f"scenario result has duplicate scenario id: {scenario_id}")
-            continue
-        if item.get("status") not in RESULT_STATUSES:
-            errors.append(f"scenario result {scenario_id}.status is invalid")
-        duration = item.get("duration_ms")
-        if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
-            errors.append(f"scenario result {scenario_id}.duration_ms must be non-negative")
-        reason = item.get("reason")
-        if reason is not None and not isinstance(reason, str):
-            errors.append(f"scenario result {scenario_id}.reason must be a string")
-        by_id[scenario_id] = item
-    return by_id
-
-
 def run_scenarios(
     task_dir: Path | str,
     project_root: Path | str,
@@ -1140,7 +920,7 @@ def run_scenarios(
     readiness = validate_task_dir(task)
     if not readiness.ready:
         errors.extend(f"task readiness: {error}" for error in readiness.errors)
-    scenarios = _effective_scenarios(task, policy, errors)
+    scenarios = _resolve_scenario_set(task, policy, errors).scenarios
     by_id = {
         scenario["id"]: scenario
         for scenario in scenarios
@@ -1169,7 +949,7 @@ def run_scenarios(
         execution_errors.extend(f"runner {runner_name}: {error}" for error in runner_errors)
         normalized_results.update({item["id"]: item for item in results})
 
-    source_fingerprint, fingerprint_errors = _source_fingerprint(root, policy)
+    source_fingerprint, fingerprint_errors = _source_fingerprint(root)
     if source_fingerprint is None:
         return ScenarioRunResult(False, tuple(execution_errors) + fingerprint_errors, None)
 
@@ -1212,7 +992,7 @@ def validate_completion(
     readiness = validate_task_dir(task)
     if not readiness.ready:
         errors.extend(f"task readiness: {error}" for error in readiness.errors)
-    scenarios = _effective_scenarios(task, policy, errors)
+    scenarios = _resolve_scenario_set(task, policy, errors).scenarios
     effective_ids = tuple(
         scenario["id"] for scenario in scenarios if isinstance(scenario.get("id"), str)
     )
@@ -1234,7 +1014,7 @@ def validate_completion(
             errors.append("scenario result effective_scenarios_sha256 is stale")
         if result.get("runner_config_sha256") != policy.sha256:
             errors.append("scenario result runner_config_sha256 is stale")
-        fingerprint, fingerprint_errors = _source_fingerprint(root.resolve(strict=True), policy)
+        fingerprint, fingerprint_errors = _source_fingerprint(root.resolve(strict=True))
         errors.extend(fingerprint_errors)
         if fingerprint is None or result.get("source_fingerprint") != fingerprint:
             errors.append("scenario result source_fingerprint is stale")
@@ -1300,34 +1080,17 @@ def review_template(task_dir: Path | str, project_root: Path | str) -> dict[str,
     readiness = validate_task_dir(task)
     if not readiness.ready:
         errors.extend(f"task readiness: {error}" for error in readiness.errors)
-    scenarios = _effective_scenarios(
+    resolved = _resolve_scenario_set(
         task, policy, errors, validate_review_artifact=False
     )
     if errors:
         raise ValueError("; ".join(errors))
-    inherited = task / INHERITANCE_FILENAME
-    if inherited.is_symlink() or inherited.exists():
-        inheritance_loaded = _load_json(inherited, INHERITANCE_FILENAME, errors)
-        if inheritance_loaded is None:
-            raise ValueError("; ".join(errors))
-        parent_name = inheritance_loaded[0].get("parent_task")
-        parent = task.parent / str(parent_name)
-        subject = task / OVERLAY_FILENAME
-        flow = parent / "implementation.md"
-        parent_contract = parent / CONTRACT_FILENAME
-        try:
-            parent_sha256 = _sha256(parent_contract.read_bytes())
-        except OSError as exc:
-            errors.append(f"cannot hash parent scenario contract: {exc}")
-            parent_sha256 = ""
-    else:
-        subject = task / CONTRACT_FILENAME
-        flow = task / "implementation.md"
-        parent_sha256 = ""
     try:
         task_sha256 = _sha256((task / "task.md").read_bytes())
-        flow_sha256 = _sha256(flow.read_bytes())
-        subject_sha256 = _sha256(subject.read_bytes())
+        flow_sha256 = _sha256(resolved.flow_path.read_bytes())
+        if resolved.subject_content is None:
+            raise OSError("scenario subject is unavailable")
+        subject_sha256 = _sha256(resolved.subject_content)
     except OSError as exc:
         errors.append(f"cannot create scenario review template: {exc}")
     if errors:
@@ -1337,10 +1100,10 @@ def review_template(task_dir: Path | str, project_root: Path | str) -> dict[str,
         "task_sha256": task_sha256,
         "flow_sha256": flow_sha256,
         "subject_sha256": subject_sha256,
-        "parent_contract_sha256": parent_sha256,
+        "parent_contract_sha256": resolved.parent_contract_sha256,
         "reviewed_scenarios": [
             scenario["id"]
-            for scenario in scenarios
+            for scenario in resolved.scenarios
             if isinstance(scenario.get("id"), str)
         ],
         "verdict": "revise",

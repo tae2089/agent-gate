@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 import tempfile
 import time
@@ -107,72 +106,32 @@ class ScenarioRunnerTest(unittest.TestCase):
         self.assertLess(elapsed, 2.0)
         self.assertTrue(any("output exceeded" in error for error in run.errors), run.errors)
 
-    def test_agent_gate_json_report_maps_exact_scenario_ids(self):
-        report = self.project / ".agent-gate" / "report.json"
-        value = {
-            "schema_version": 1,
-            "results": [
-                {"id": "S-ALLOW-READY", "status": "passed", "duration_ms": 3},
-                {
-                    "id": "S-BLOCK-STALE",
-                    "status": "failed",
-                    "duration_ms": 4,
-                    "reason": "expected block",
-                },
-            ],
-        }
-        program = (
-            "from pathlib import Path; "
-            f"Path({str(report)!r}).write_text({json.dumps(value)!r}, encoding='utf-8')"
-        )
-        self.configure(
-            {
-                "command": [sys.executable, "-c", program],
-                "format": "agent-gate-json",
-                "report_path": ".agent-gate/report.json",
-            }
-        )
-        run = run_scenarios(self.task_dir, self.project)
-        self.assertTrue(run.result_written, run.errors)
-        self.assertEqual(
-            [item["status"] for item in self.result()["results"]],
-            ["passed", "failed"],
-        )
-
-    def test_junit_report_maps_pass_failure_and_skip(self):
-        report = self.project / ".agent-gate" / "report.xml"
-        xml = """<testsuite>
-          <testcase name="S-ALLOW-READY" time="0.01" />
-          <testcase name="S-BLOCK-STALE" time="0.02"><skipped message="offline" /></testcase>
-        </testsuite>"""
-        program = (
-            "from pathlib import Path; "
-            f"Path({str(report)!r}).write_text({xml!r}, encoding='utf-8')"
-        )
-        self.configure(
-            {
-                "command": [sys.executable, "-c", program],
-                "format": "junit-xml",
-                "report_path": ".agent-gate/report.xml",
-            }
-        )
-        run = run_scenarios(self.task_dir, self.project)
-        self.assertTrue(run.result_written, run.errors)
-        self.assertEqual(
-            [item["status"] for item in self.result()["results"]],
-            ["passed", "infrastructure-error"],
-        )
-
-    def test_runner_config_rejects_shell_strings_and_unsafe_reports(self):
+    def test_runner_config_rejects_invalid_shapes_and_formats(self):
         cases = (
             ({"command": "go test ./...", "format": "exit-code"}, "string array"),
             (
                 {
                     "command": ["go", "test", "./..."],
-                    "format": "junit-xml",
-                    "report_path": "../outside.xml",
+                    "format": "agent-gate-json",
+                    "report_path": ".agent-gate/report.json",
                 },
-                "inside the project",
+                "format must be one of",
+            ),
+            (
+                {
+                    "command": ["go", "test", "./..."],
+                    "format": "junit-xml",
+                    "report_path": ".agent-gate/report.xml",
+                },
+                "format must be one of",
+            ),
+            (
+                {
+                    "command": ["go", "test", "./..."],
+                    "format": "exit-code",
+                    "report_path": ".agent-gate/report.xml",
+                },
+                "report_path",
             ),
             (
                 {
@@ -193,46 +152,6 @@ class ScenarioRunnerTest(unittest.TestCase):
                 policy, errors = load_policy(self.project)
                 self.assertIsNone(policy)
                 self.assertTrue(any(fragment in error for error in errors), errors)
-
-    def test_runner_rejects_symlinked_report_parent(self):
-        link = self.project / "report-link"
-        link.symlink_to(self.project / ".agent-gate", target_is_directory=True)
-        self.configure(
-            {
-                "command": [sys.executable, "-c", "raise SystemExit(0)"],
-                "format": "agent-gate-json",
-                "report_path": "report-link/report.json",
-            }
-        )
-        run = run_scenarios(self.task_dir, self.project)
-        self.assertTrue(run.result_written)
-        self.assertTrue(any("symlink" in error for error in run.errors), run.errors)
-
-    def test_runner_never_deletes_a_tracked_report_path(self):
-        report = self.project / ".agent-gate" / "tracked-report.json"
-        report.write_text("KEEP", encoding="utf-8")
-        subprocess.run(
-            ["git", "add", ".agent-gate/tracked-report.json"],
-            cwd=self.project,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-qm", "track report"],
-            cwd=self.project,
-            check=True,
-        )
-        self.configure(
-            {
-                "command": [sys.executable, "-c", "raise SystemExit(0)"],
-                "format": "agent-gate-json",
-                "report_path": ".agent-gate/tracked-report.json",
-            }
-        )
-        run = run_scenarios(self.task_dir, self.project)
-        self.assertTrue(run.result_written)
-        self.assertTrue(any("tracked" in error for error in run.errors), run.errors)
-        self.assertEqual(report.read_text(encoding="utf-8"), "KEEP")
-
 
 class ScenarioResultFreshnessTest(unittest.TestCase):
     def setUp(self):

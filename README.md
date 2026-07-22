@@ -120,7 +120,7 @@ python3 scripts/scenario_gate.py completion _workspace/<task> --project-root . -
 | `critical-enforce` | current contract/review 필수 | `risk: critical` 결과만 차단, standard 실패는 경고 |
 | `enforce` | current contract/review 필수 | 모든 scenario와 미해결 `parent-candidate`를 차단 |
 
-Runner는 exit-code, agent-gate JSON, JUnit XML을 지원하고 shell 없이 실행한다. 상속 환경은 PATH·locale·temp·주요 언어 toolchain 경로로 제한한다. 결과는 effective scenario canonical hash, exact runner config hash, Git HEAD/경로 제한 tracked diff, untracked 파일의 내용이 아닌 path/mode/size/mtime metadata에 결합한다. 따라서 로컬 freshness는 우발적 stale 방지이고, CI의 clean commit identity가 가장 강한 증거다. OS 수준 network sandbox는 제공하지 않으므로 runner 설정은 신뢰된 저장소에서만 사용하고 production credential을 주입하지 않는다.
+Runner는 범용 exit-code만 지원하고 shell 없이 실행한다. 하나의 runner에 연결된 scenario들은 명령 성공 시 모두 통과하고, 명령 실패 시 모두 실패한다. 상속 환경은 PATH·locale·temp·주요 언어 toolchain 경로로 제한한다. 결과는 effective scenario canonical hash, exact runner config hash, Git HEAD/경로 제한 tracked diff, untracked 파일의 내용이 아닌 path/mode/size/mtime metadata에 결합한다. 따라서 로컬 freshness는 우발적 stale 방지이고, CI의 clean commit identity가 가장 강한 증거다. OS 수준 network sandbox는 제공하지 않으므로 runner 설정은 신뢰된 저장소에서만 사용하고 production credential을 주입하지 않는다.
 
 토큰 비용은 contract/overlay가 바뀔 때의 독립 검토에만 발생한다. Hook과 runner 판정은 LLM을 호출하지 않으며, 같은 task/flow/subject hash의 review는 재사용한다. 자식은 부모 시나리오를 다시 생성하지 않고 할당된 ID만 상속한다.
 
