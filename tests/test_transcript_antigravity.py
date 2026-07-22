@@ -64,6 +64,25 @@ class AntigravityNormalizationTest(unittest.TestCase):
         self.assertEqual(len(writes), 1)
         self.assertEqual(writes[0].input["file_path"], "/proj/NOTES.md")
 
+    def test_replace_tools_become_edits_with_file_path(self):
+        for tool_name in ("replace_file_content", "multi_replace_file_content"):
+            with self.subTest(tool_name=tool_name):
+                entries = parse(
+                    [
+                        ag_planner(
+                            [
+                                {
+                                    "name": tool_name,
+                                    "args": {"TargetFile": "/proj/app.py"},
+                                }
+                            ]
+                        )
+                    ]
+                )
+                edits = all_tool_calls(entries, "Edit")
+                self.assertEqual(len(edits), 1)
+                self.assertEqual(edits[0].input["file_path"], "/proj/app.py")
+
     def test_run_command_becomes_bash(self):
         entries = parse([ag_planner([{"name": "run_command",
                                       "args": {"CommandLine": "ls", "Cwd": "/proj"}}])])
@@ -112,6 +131,25 @@ class AntigravityVerifierE2ETest(VerifierHarness):
             ag_planner([{"name": "write_to_file", "args": {"TargetFile": "/proj/app.py", "CodeContent": "x"}}]),
         ])
         self.assert_blocked(proc, "coding-quality-guardrails")
+
+    def test_replace_tools_trigger_code_edit_rule(self):
+        for tool_name in ("replace_file_content", "multi_replace_file_content"):
+            with self.subTest(tool_name=tool_name):
+                proc = self.run_ag(
+                    [GUARDRAILS_RULE],
+                    [
+                        ag_user("고쳐줘"),
+                        ag_planner(
+                            [
+                                {
+                                    "name": tool_name,
+                                    "args": {"TargetFile": "/proj/app.py"},
+                                }
+                            ]
+                        ),
+                    ],
+                )
+                self.assert_blocked(proc, "coding-quality-guardrails")
 
 
 if __name__ == "__main__":

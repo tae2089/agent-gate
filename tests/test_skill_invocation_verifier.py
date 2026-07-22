@@ -14,6 +14,7 @@ from pathlib import Path
 from transcript_helpers import tool_result, tool_use, user_text, write_call
 
 VERIFIER = Path(__file__).resolve().parent.parent / "hooks" / "skill_invocation_verifier.py"
+PROJECT_RULES = Path(__file__).resolve().parent.parent / ".claude" / "skill-rules.json"
 
 
 GUARDRAILS_RULE = {
@@ -218,6 +219,23 @@ class TestVerifier(VerifierHarness):
     def test_t12_non_object_rule_file_fails_open(self):
         self.rules_path.write_text("[]", encoding="utf-8")
         self.write_transcript([user_text("디버깅 해줘")])
+        self.assert_passed(self.run_hook(self.hook_input()))
+
+    def test_t13_project_rules_require_flow_design_for_implementation_edit(self):
+        self.rules_path = PROJECT_RULES
+        self.write_transcript([
+            user_text("설계 문서를 작성해줘"),
+            write_call("/project/_workspace/change/implementation.md"),
+        ])
+        self.assert_blocked(self.run_hook(self.hook_input()), "flow-design")
+
+    def test_t14_flow_design_invocation_satisfies_implementation_edit_rule(self):
+        self.rules_path = PROJECT_RULES
+        self.write_transcript([
+            user_text("설계 문서를 작성해줘"),
+            tool_use("Skill", {"skill": "flow-design"}),
+            write_call("/project/_workspace/change/implementation.md"),
+        ])
         self.assert_passed(self.run_hook(self.hook_input()))
 
 

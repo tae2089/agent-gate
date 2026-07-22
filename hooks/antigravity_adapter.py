@@ -59,7 +59,7 @@ def to_claude_stdin(event_json: dict) -> dict:
 
 
 def underlying_blocked(stdout: str) -> tuple[bool, str | None]:
-    """Read the underlying hook's Claude-contract verdict from its stdout."""
+    """Read a blocking Claude hook verdict from an underlying hook's stdout."""
     for line in stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -68,8 +68,14 @@ def underlying_blocked(stdout: str) -> tuple[bool, str | None]:
             verdict = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(verdict, dict) and verdict.get("decision") == "block":
+        if not isinstance(verdict, dict):
+            continue
+        if verdict.get("decision") == "block":
             reason = verdict.get("reason")
+            return True, reason if isinstance(reason, str) else None
+        output = verdict.get("hookSpecificOutput")
+        if isinstance(output, dict) and output.get("permissionDecision") == "deny":
+            reason = output.get("permissionDecisionReason")
             return True, reason if isinstance(reason, str) else None
     return False, None
 

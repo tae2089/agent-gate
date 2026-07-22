@@ -123,6 +123,24 @@ if __name__ == "__main__":
     unittest.main()
 
 
+PSEUDOCODE_BLOCK = """## Pseudocode
+
+```text
+P1  receive transcript input
+P2  IF input is invalid -> return without a watermark
+```
+"""
+
+FLOW_DIAGRAM_BLOCK = """## Flow Diagram
+
+```mermaid
+flowchart TD
+    A["Receive input"] --> B{"Input valid?"}
+    B -- no --> C["Return"]
+    B -- yes --> D["Write watermark"]
+```
+"""
+
 GOOD_IMPLEMENTATION = """# implementation: watermark 보강
 
 - 설계 접근: 정규화는 hooks/transcript.py 단일 지점에서 처리
@@ -130,7 +148,7 @@ GOOD_IMPLEMENTATION = """# implementation: watermark 보강
 - 영향 파일: hooks/context_watermark.py, tests/test_context_watermark.py
 - 위험: 언급만으로 합성되는 과승인 — lint 게이트가 방어선
 - 엣지: call_id 없는 tool call은 성공 매핑 불가
-"""
+""" + PSEUDOCODE_BLOCK + FLOW_DIAGRAM_BLOCK
 
 GOOD_WALKTHROUGH = """[2026-07-21 10:00] decision: 정규화를 parse_transcript 내부 단일 지점으로
 [2026-07-21 10:20] error: watermark 데드락 — 합성 Write 부재가 원인
@@ -192,9 +210,27 @@ class TestImplementationProfile(unittest.TestCase):
 - Assumption: both runtimes provide a stable session id.
 - Affected file: tests/test_readiness_hook.py.
 - Risk: an outdated assessment must fail closed.
-"""
+""" + PSEUDOCODE_BLOCK + FLOW_DIAGRAM_BLOCK
         data = json.loads(self.lint(content).stdout)
         self.assertTrue(data["passed"], data)
+
+    def test_i5_missing_numbered_pseudocode_block_fails_floor(self):
+        data = json.loads(self.lint(GOOD_IMPLEMENTATION.replace(PSEUDOCODE_BLOCK, "")).stdout)
+        self.assertFalse(data["passed"])
+        self.assertIn("pseudocode", data["floor_failures"])
+
+    def test_i6_missing_control_flow_diagram_fails_floor(self):
+        data = json.loads(self.lint(GOOD_IMPLEMENTATION.replace(FLOW_DIAGRAM_BLOCK, "")).stdout)
+        self.assertFalse(data["passed"])
+        self.assertIn("flow_diagram", data["floor_failures"])
+
+    def test_i7_prose_mentions_do_not_satisfy_design_artifact_floors(self):
+        content = GOOD_IMPLEMENTATION.replace(PSEUDOCODE_BLOCK, "P1과 P2를 설계했다.\n") \
+                                     .replace(FLOW_DIAGRAM_BLOCK, "Mermaid flowchart를 설계했다.\n")
+        data = json.loads(self.lint(content).stdout)
+        self.assertFalse(data["passed"])
+        self.assertIn("pseudocode", data["floor_failures"])
+        self.assertIn("flow_diagram", data["floor_failures"])
 
 
 class TestWalkthroughProfile(unittest.TestCase):

@@ -40,6 +40,24 @@ FILE_PATH_PATTERN = r"[\w./-]+\.(md|py|go|ts|tsx|java|kt|json|yaml|yml|sh|toml)\
 # Stable acceptance-criterion id; shared with scripts/readiness_gate.py.
 AC_ID_PATTERN = r"\bAC-\d+\b"
 
+# Full-tier design artifacts must be real fenced blocks, not prose that merely
+# mentions P1 or Mermaid. P1/P2 establish a minimum trace; semantic branch and
+# failure completeness remains the independent judge's responsibility.
+PSEUDOCODE_BLOCK_PATTERN = (
+    r"(?im)^```(?:text|pseudocode)[ \t]*\r?\n"
+    r"(?:(?!^```[ \t]*$)[\s\S])*?"
+    r"^[ \t]*P1(?:[ \t]+|[.:])[^\r\n]+\r?\n"
+    r"(?:(?!^```[ \t]*$)[\s\S])*?"
+    r"^[ \t]*P2(?:[ \t]+|[.:])[^\r\n]+\r?\n"
+    r"(?:(?!^```[ \t]*$)[\s\S])*?^```[ \t]*$"
+)
+FLOW_DIAGRAM_BLOCK_PATTERN = (
+    r"(?im)^```mermaid[ \t]*\r?\n[ \t]*"
+    r"(?:(?:flowchart|graph)[ \t]+(?:TB|TD|BT|RL|LR)"
+    r"|sequenceDiagram|stateDiagram(?:-v2)?)[^\r\n]*\r?\n"
+    r"(?:(?!^```[ \t]*$)[\s\S])*?^```[ \t]*$"
+)
+
 HANDOFF_CHECKS = [
     Check("goal", 0.15, False, "goal section", ["목표", "goal"]),
     Check("completed", 0.10, False, "completed-work section", ["완료", "completed", "work done"]),
@@ -53,11 +71,9 @@ HANDOFF_CHECKS = [
           pattern=r"(?m)(^\s*>\s*\S|[\"“”「『][^\"“”」』\n]{3,}[\"“”」』])"),
 ]
 
-# implementation.md is flat bullets by convention, so these are whole-document
-# keyword checks rather than section checks. The flowchart convention (include a
-# mermaid diagram when the logic is non-trivial) is intentionally NOT a lint
-# check — warrant can't be judged deterministically; it lives in
-# docs/rubric-judge.md and is scored by the tier-2 judge.
+# implementation.md uses whole-document checks. Full-tier existence is already
+# decided by the project workflow, so pseudocode and a control-flow diagram are
+# deterministic floors here; their semantic quality remains a tier-2 judgment.
 IMPLEMENTATION_CHECKS = [
     Check("approach", 0.25, False, "design approach stated",
           pattern=r"설계|접근|구조|방식|위치|(?i:approach|design|architecture)"),
@@ -66,6 +82,10 @@ IMPLEMENTATION_CHECKS = [
     Check("affected_files", 0.30, True, "affected modules/files cited", pattern=FILE_PATH_PATTERN),
     Check("risks", 0.30, True, "risks/edge cases listed",
           pattern=r"위험|엣지|한계|(?i:risk|edge)"),
+    Check("pseudocode", 0.0, True, "fenced P1/P2 pseudocode block",
+          pattern=PSEUDOCODE_BLOCK_PATTERN),
+    Check("flow_diagram", 0.0, True, "fenced control-flow Mermaid block",
+          pattern=FLOW_DIAGRAM_BLOCK_PATTERN),
 ]
 
 TASK_CHECKS = [

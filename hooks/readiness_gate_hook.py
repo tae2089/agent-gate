@@ -18,7 +18,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from readiness_gate import validate_task_dir  # noqa: E402
+from readiness_gate import INHERITANCE_FILENAME, validate_task_dir  # noqa: E402
 from readiness_state import load_binding, project_relative, record_binding  # noqa: E402
 from transcript import note, read_hook_input, run_fail_open  # noqa: E402
 
@@ -103,6 +103,23 @@ def _block(reason: str) -> int:
     return 0
 
 
+def _pretool_block(reason: str) -> int:
+    # Claude PreToolUse decisions use the event-specific permission envelope:
+    # https://code.claude.com/docs/en/hooks#pretooluse-decision-control
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": f"[agent-gate] {reason}",
+                }
+            }
+        )
+    )
+    return 0
+
+
 def _not_ready_reason(result: Any) -> str:
     return "; ".join(result.errors[:3]) or "assessment is not ready"
 
@@ -123,20 +140,27 @@ def _enforce_guarded_edit(root: Path, event: dict[str, Any]) -> int:
     try:
         state, task_dir = load_binding(root, _session_id(event))
         if state == "absent":
-            return _block(
-                "no readiness task is bound to this session; write and validate "
-                "_workspace/<task>/assessment.json with the artifact-judge readiness "
-                "procedure before editing protected project files"
+            return _pretool_block(
+                "no readiness task is bound to this session; bind either a Full "
+                "assessment.json from the artifact-judge procedure or an "
+                "inherited-readiness.json that references a ready Full parent before "
+                "editing protected project files"
             )
         if state != "bound" or task_dir is None:
-            return _block("unsafe readiness session marker; remove or repair the local marker")
+            return _pretool_block(
+                "unsafe readiness session marker; remove or repair the local marker"
+            )
 
         result = validate_task_dir(task_dir)
         if not result.ready:
-            return _block(f"bound task is not ready: {_not_ready_reason(result)}")
+            return _pretool_block(
+                f"bound task is not ready: {_not_ready_reason(result)}"
+            )
         return 0
     except Exception as exc:
-        return _block(f"readiness gate failed safely: {type(exc).__name__}")
+        return _pretool_block(
+            f"readiness gate failed safely: {type(exc).__name__}"
+        )
 
 
 def run_pre(event: dict[str, Any]) -> int:
@@ -156,7 +180,9 @@ def run_pre(event: dict[str, Any]) -> int:
     for raw_path in paths:
         relative = project_relative(root, raw_path)
         if relative is None:
-            return _block(f"guarded edit target is outside the project or unsafe: {raw_path}")
+            return _pretool_block(
+                f"guarded edit target is outside the project or unsafe: {raw_path}"
+            )
         if _workspace_path(relative) or _unguarded_document(relative):
             continue
         guarded.append(relative)
@@ -165,7 +191,7 @@ def run_pre(event: dict[str, Any]) -> int:
     return _enforce_guarded_edit(root, event)
 
 
-def _assessment_task(root: Path, raw_path: str) -> Path | None:
+def _readiness_task(root: Path, raw_path: str) -> Path | None:
     relative = project_relative(root, raw_path)
     if relative is None:
         return None
@@ -175,7 +201,7 @@ def _assessment_task(root: Path, raw_path: str) -> Path | None:
         or parts[0] != "_workspace"
         or not parts[1]
         or parts[1].startswith(".")
-        or parts[2] != "assessment.json"
+        or parts[2] not in ("assessment.json", INHERITANCE_FILENAME)
     ):
         return None
     task_dir = root / Path(*parts[:2])
@@ -195,14 +221,19 @@ def run_bind(event: dict[str, Any]) -> int:
     if root is None or not session_id:
         return 0
     for raw_path in edit_paths(event):
-        task_dir = _assessment_task(root, raw_path)
+        task_dir = _readiness_task(root, raw_path)
         if task_dir is None:
             continue
         result = validate_task_dir(task_dir)
         if result.ready:
             record_binding(root, session_id, task_dir)
             return 0
-        return _block(f"assessment is not ready: {_not_ready_reason(result)}")
+        label = (
+            "assessment"
+            if Path(raw_path).name == "assessment.json"
+            else "readiness proof"
+        )
+        return _block(f"{label} is not ready: {_not_ready_reason(result)}")
     return 0
 
 

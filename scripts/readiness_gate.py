@@ -27,6 +27,17 @@ SCHEMA_VERSION = 1
 TASK_AMBIGUITY_MAX = 0.20
 IMPLEMENTATION_READINESS_MIN = 0.80
 AC_PATTERN = re.compile(AC_ID_PATTERN)
+INHERITANCE_FILENAME = "inherited-readiness.json"
+INHERITANCE_MODE = "inherit-full"
+INHERITANCE_FIELDS = frozenset({
+    "schema_version",
+    "mode",
+    "parent_task",
+    "child_task_sha256",
+    "flow_refs",
+    "acceptance_refs",
+})
+P_REF_PATTERN = re.compile(r"\bP[1-9]\d*\b")
 
 # name: (weight, minimum score)
 TASK_DIMENSIONS = {
@@ -166,8 +177,8 @@ def _ac_coverage(task_text: str, implementation_text: str, errors: list[str]) ->
     return (len(task_ids) - len(missing)) / len(task_ids)
 
 
-def validate_task_dir(task_dir: Path | str) -> ValidationResult:
-    """Return deterministic readiness for one ``_workspace/<task>`` directory."""
+def _validate_full_task_dir(task_dir: Path | str) -> ValidationResult:
+    """Validate one self-contained Full task without inheritance dispatch."""
     task_dir = Path(task_dir)
     errors: list[str] = []
     task_artifact = _read_artifact(task_dir / "task.md", "task.md", errors)
@@ -246,6 +257,181 @@ def validate_task_dir(task_dir: Path | str) -> ValidationResult:
     )
 
 
+def _manifest_object(path: Path, errors: list[str]) -> dict[str, Any] | None:
+    if path.is_symlink():
+        errors.append(f"{INHERITANCE_FILENAME} must not be a symlink")
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append(f"cannot read {INHERITANCE_FILENAME}: {exc}")
+        return None
+    if not isinstance(value, dict):
+        errors.append(f"{INHERITANCE_FILENAME} must contain a JSON object")
+        return None
+    return value
+
+
+def _workspace_task(task_dir: Path, label: str, errors: list[str]) -> Path | None:
+    """Resolve a direct ``_workspace/<slug>`` directory without symlinks."""
+    try:
+        if task_dir.is_symlink() or task_dir.parent.is_symlink():
+            errors.append(f"{label} must not be a symlink")
+            return None
+        resolved = task_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        errors.append(f"cannot resolve {label}: {exc}")
+        return None
+    if (
+        not resolved.is_dir()
+        or resolved.parent.name != "_workspace"
+        or not resolved.name
+        or resolved.name.startswith(".")
+    ):
+        errors.append(f"{label} must be a direct _workspace/<task> directory")
+        return None
+    return resolved
+
+
+def _parent_task(child: Path, value: Any, errors: list[str]) -> Path | None:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or value.startswith(".")
+        or Path(value).parts != (value,)
+    ):
+        errors.append("parent_task must be one safe sibling task name")
+        return None
+    candidate = child.parent / value
+    if candidate == child:
+        errors.append("parent_task must not reference the child itself")
+        return None
+    resolved = _workspace_task(candidate, "parent task", errors)
+    if resolved is None:
+        return None
+    inherited = resolved / INHERITANCE_FILENAME
+    if inherited.is_symlink() or inherited.exists():
+        errors.append("parent task must be a direct Full task, not another inherited task")
+        return None
+    return resolved
+
+
+def _reference_list(
+    manifest: dict[str, Any], key: str, pattern: re.Pattern[str], errors: list[str]
+) -> tuple[str, ...]:
+    value = manifest.get(key)
+    if not isinstance(value, list) or not value:
+        errors.append(f"{key} must be a non-empty list")
+        return ()
+    refs: list[str] = []
+    for item in value:
+        if not isinstance(item, str) or pattern.fullmatch(item) is None:
+            errors.append(f"{key} contains an invalid reference: {item!r}")
+            continue
+        refs.append(item)
+    if len(refs) != len(set(refs)):
+        errors.append(f"{key} contains duplicate references")
+    return tuple(dict.fromkeys(refs))
+
+
+def _validate_inherited_task_dir(task_dir: Path) -> ValidationResult:
+    errors: list[str] = []
+    child = _workspace_task(task_dir, "child task", errors)
+    if child is None:
+        return ValidationResult(False, tuple(errors), None, None, None)
+
+    manifest = _manifest_object(child / INHERITANCE_FILENAME, errors)
+    child_artifact = _read_artifact(child / "task.md", "child task.md", errors)
+    if manifest is None or child_artifact is None:
+        return ValidationResult(False, tuple(errors), None, None, None)
+    child_bytes, child_text = child_artifact
+
+    missing_fields = sorted(INHERITANCE_FIELDS - manifest.keys())
+    unknown_fields = sorted(manifest.keys() - INHERITANCE_FIELDS)
+    if missing_fields:
+        errors.append(f"inheritance manifest is missing fields: {', '.join(missing_fields)}")
+    if unknown_fields:
+        errors.append(f"inheritance manifest has unknown fields: {', '.join(unknown_fields)}")
+    if manifest.get("schema_version") != SCHEMA_VERSION:
+        errors.append(f"schema_version must be {SCHEMA_VERSION}")
+    if manifest.get("mode") != INHERITANCE_MODE:
+        errors.append(f"mode must be {INHERITANCE_MODE!r}")
+    if manifest.get("child_task_sha256") != _sha256(child_bytes):
+        errors.append("child_task_sha256 is missing or stale")
+    for filename in ("implementation.md", "assessment.json"):
+        path = child / filename
+        if path.is_symlink() or path.exists():
+            errors.append(f"inherited child must not define {filename}")
+
+    child_lint = lint_file(child / "task.md", "task")
+    if child_lint is None:
+        errors.append("cannot lint child task.md")
+    elif not child_lint["passed"]:
+        failed = [key for key, passed in child_lint["checks"].items() if not passed]
+        errors.append(f"child task.md fails structural lint: {', '.join(failed)}")
+
+    flow_refs = _reference_list(manifest, "flow_refs", P_REF_PATTERN, errors)
+    acceptance_refs = _reference_list(manifest, "acceptance_refs", AC_PATTERN, errors)
+    parent = _parent_task(child, manifest.get("parent_task"), errors)
+    if parent is None:
+        return ValidationResult(False, tuple(errors), None, None, None)
+
+    parent_result = _validate_full_task_dir(parent)
+    if not parent_result.ready:
+        errors.extend(f"parent readiness: {error}" for error in parent_result.errors)
+        return ValidationResult(
+            False,
+            tuple(errors),
+            parent_result.task_ambiguity,
+            parent_result.implementation_readiness,
+            parent_result.ac_coverage,
+        )
+
+    try:
+        parent_task_text = (parent / "task.md").read_text(encoding="utf-8")
+        parent_implementation_text = (parent / "implementation.md").read_text(
+            encoding="utf-8"
+        )
+    except (OSError, UnicodeError) as exc:
+        errors.append(f"cannot read parent flow artifacts: {exc}")
+    else:
+        parent_flow_refs = set(P_REF_PATTERN.findall(parent_implementation_text))
+        parent_acceptance_refs = set(AC_PATTERN.findall(parent_task_text))
+        child_acceptance_refs = set(AC_PATTERN.findall(child_text))
+        for ref in flow_refs:
+            if ref not in parent_flow_refs:
+                errors.append(f"flow reference {ref} is missing from parent implementation.md")
+        for ref in acceptance_refs:
+            if ref not in parent_acceptance_refs:
+                errors.append(f"acceptance reference {ref} is missing from parent task.md")
+            if ref not in child_acceptance_refs:
+                errors.append(f"acceptance reference {ref} is missing from child task.md")
+        unbound_child_refs = sorted(child_acceptance_refs - set(acceptance_refs))
+        if unbound_child_refs:
+            errors.append(
+                "child task.md has acceptance references not bound by the manifest: "
+                + ", ".join(unbound_child_refs)
+            )
+
+    return ValidationResult(
+        ready=not errors,
+        errors=tuple(errors),
+        task_ambiguity=parent_result.task_ambiguity,
+        implementation_readiness=parent_result.implementation_readiness,
+        ac_coverage=parent_result.ac_coverage,
+    )
+
+
+def validate_task_dir(task_dir: Path | str) -> ValidationResult:
+    """Validate a self-contained Full task or a child inheriting one."""
+    path = Path(task_dir)
+    manifest = path / INHERITANCE_FILENAME
+    if manifest.is_symlink() or manifest.exists():
+        return _validate_inherited_task_dir(path)
+    return _validate_full_task_dir(path)
+
+
 def assessment_template(task_dir: Path | str) -> dict[str, Any]:
     """Create an unscored assessment skeleton bound to current artifact bytes."""
     task_dir = Path(task_dir)
@@ -270,10 +456,62 @@ def assessment_template(task_dir: Path | str) -> dict[str, Any]:
     }
 
 
+def inheritance_template(
+    child_dir: Path | str, parent_dir: Path | str
+) -> dict[str, Any]:
+    """Create a child manifest bound to a ready direct Full parent."""
+    errors: list[str] = []
+    child = _workspace_task(Path(child_dir), "child task", errors)
+    if child is None:
+        raise ValueError("; ".join(errors))
+    parent_input = Path(parent_dir)
+    if parent_input.is_symlink():
+        raise ValueError("parent task must not be a symlink")
+    try:
+        parent_resolved = parent_input.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"cannot resolve parent task: {exc}") from exc
+    parent = _parent_task(child, parent_resolved.name, errors)
+    if parent is None or parent != parent_resolved:
+        raise ValueError(
+            "; ".join(errors or ["parent task must be a sibling of child task"])
+        )
+    parent_result = _validate_full_task_dir(parent)
+    if not parent_result.ready:
+        raise ValueError("parent task is not ready: " + "; ".join(parent_result.errors[:3]))
+    child_artifact = _read_artifact(child / "task.md", "child task.md", errors)
+    if child_artifact is None:
+        raise ValueError("; ".join(errors))
+    child_bytes, _ = child_artifact
+    child_lint = lint_file(child / "task.md", "task")
+    if child_lint is None or not child_lint["passed"]:
+        raise ValueError("child task.md must pass structural lint")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "mode": INHERITANCE_MODE,
+        "parent_task": parent.name,
+        "child_task_sha256": _sha256(child_bytes),
+        "flow_refs": [],
+        "acceptance_refs": [],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--json", action="store_true", help="emit machine-readable validation")
-    parser.add_argument("--template", action="store_true", help="emit a content-bound assessment skeleton")
+    parser.add_argument(
+        "--json", action="store_true", help="emit machine-readable validation"
+    )
+    templates = parser.add_mutually_exclusive_group()
+    templates.add_argument(
+        "--template",
+        action="store_true",
+        help="emit a content-bound assessment skeleton",
+    )
+    templates.add_argument(
+        "--inherit-from",
+        metavar="PARENT_TASK",
+        help="emit a child manifest inheriting a ready direct Full parent",
+    )
     parser.add_argument("task_dir")
     args = parser.parse_args()
     task_dir = Path(args.task_dir)
@@ -283,6 +521,14 @@ def main() -> int:
             template = assessment_template(task_dir)
         except OSError as exc:
             print(f"cannot create template: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(template, ensure_ascii=False, indent=2))
+        return 0
+    if args.inherit_from:
+        try:
+            template = inheritance_template(task_dir, Path(args.inherit_from))
+        except (OSError, ValueError) as exc:
+            print(f"cannot create inheritance template: {exc}", file=sys.stderr)
             return 2
         print(json.dumps(template, ensure_ascii=False, indent=2))
         return 0

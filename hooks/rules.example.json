@@ -15,6 +15,15 @@
         "prompt_pattern": "(?i)(디버깅|버그 ?(잡|고쳐|수정)|flaky|regression|root ?cause)"
       },
       "require": { "skill": "diagnosing-bugs" }
+    },
+    {
+      "id": "implementation-edits-need-flow-design",
+      "when": {
+        "tool": "Write|Edit",
+        "input_pattern": "implementation\\.md\""
+      },
+      "require": { "skill": "flow-design" },
+      "message": "Full-tier implementation design requires numbered pseudocode and a control-flow Mermaid diagram"
     }
   ]
 }

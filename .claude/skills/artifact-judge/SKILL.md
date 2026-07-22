@@ -1,6 +1,6 @@
 ---
 name: artifact-judge
-description: Score an agent artifact's semantic quality with an independent LLM judge, or certify task.md plus implementation.md before source editing. Use for artifact evaluation, vague task/spec checks, handoff scoring, and readiness assessment generation. Not for reviewing code.
+description: Score an agent artifact's semantic quality with an independent LLM judge, certify task.md plus implementation.md before source editing, or bind a decomposed child to a ready Full parent. Use for artifact evaluation, vague task/spec checks, handoff scoring, readiness assessment generation, and inherited child readiness. Not for reviewing code.
 ---
 
 # Artifact Judge
@@ -9,9 +9,38 @@ Two-tier gate: the deterministic lint catches absence for free; this skill pays
 for one LLM judgment only when the artifact passes it. The judge must be an
 independent context — never the session that wrote the artifact.
 
-Route `task.md` + `implementation.md` source-edit readiness to
-`docs/readiness-assessment.md`. Route every other artifact to
+Route Full `task.md` + `implementation.md` readiness and inherited child
+readiness to `docs/readiness-assessment.md`. Route every other artifact to
 `docs/rubric-judge.md`. Read only the selected reference.
+
+## Inherited Child Procedure
+
+Use this instead of producing another implementation/assessment when a small
+child work unit belongs to an already-ready Full parent.
+
+1. **Resolve both tasks.** Identify the child `_workspace/<child>/task.md` and
+   the direct Full parent directory. The parent, not another inherited child,
+   must contain `task.md`, `implementation.md`, and `assessment.json`. Done
+   when: both exact directories are known.
+2. **Validate the parent.** Run `scripts/readiness_gate.py <parent-dir>`. Stop
+   if it is not `READY`; never inherit stale or failed readiness. Done when:
+   the parent command exits 0.
+3. **Create the bound manifest template.** Run
+   `scripts/readiness_gate.py --inherit-from <parent-dir> <child-dir>` and
+   write the output as `<child-dir>/inherited-readiness.json`. Do not alter
+   `child_task_sha256`, `mode`, or `parent_task`. Done when: the file exists.
+4. **Map the work unit.** Fill `flow_refs` with real `P<number>` lines from the
+   parent's `implementation.md` and `acceptance_refs` with parent AC ids that
+   also appear in the child `task.md`. Keep both lists non-empty and unique.
+   Do not add a tier field. Done when: every child AC and assigned flow step is
+   represented.
+5. **Validate.** Run `scripts/readiness_gate.py <child-dir>`. Fix stale hashes,
+   missing references, or parent readiness; do not create child
+   `implementation.md`/`assessment.json` to bypass inheritance. Done when: the
+   command prints `READY` and exits 0.
+
+Stop after this procedure for inherited child readiness. Parent artifact
+changes intentionally invalidate every bound child on its next protected edit.
 
 ## Readiness Procedure
 

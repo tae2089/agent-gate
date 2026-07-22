@@ -81,9 +81,18 @@ _PATCH_ACTION_TOOL = {"Add": "Write", "Update": "Edit"}
 # Antigravity tool vocabulary → Claude tool names / input keys. Shared with
 # antigravity_adapter.py so the live PreToolUse event and the transcript agree.
 # Antigravity marks a skill read with args.IsSkillFile instead of a Skill tool.
-ANTIGRAVITY_TOOL_NAMES = {"view_file": "Read", "write_to_file": "Write", "run_command": "Bash"}
-ANTIGRAVITY_ARG_KEYS = {"TargetFile": "file_path", "AbsolutePath": "file_path",
-                        "CommandLine": "command"}
+ANTIGRAVITY_TOOL_NAMES = {
+    "view_file": "Read",
+    "write_to_file": "Write",
+    "replace_file_content": "Edit",
+    "multi_replace_file_content": "Edit",
+    "run_command": "Bash",
+}
+ANTIGRAVITY_ARG_KEYS = {
+    "TargetFile": "file_path",
+    "AbsolutePath": "file_path",
+    "CommandLine": "command",
+}
 
 
 def antigravity_tool(name: str, args: dict) -> tuple[str, dict]:

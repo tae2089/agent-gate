@@ -11,7 +11,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from readiness_helpers import assessment_for, write_artifacts
+from readiness_helpers import (
+    CHILD_TASK,
+    assessment_for,
+    inheritance_for,
+    write_artifacts,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOK = ROOT / "hooks" / "readiness_gate_hook.py"
@@ -63,6 +68,15 @@ class ReadinessHookHarness(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         self.assertEqual(proc.stdout.strip(), "")
 
+    def inherited_task(self):
+        child = self.project / "_workspace" / "child-task"
+        child.mkdir(parents=True, exist_ok=True)
+        (child / "task.md").write_text(CHILD_TASK, encoding="utf-8")
+        manifest = inheritance_for(child, parent_task="sample-task")
+        path = child / "inherited-readiness.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        return child, path
+
     def assert_blocked(self, proc, fragment):
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
         verdict = json.loads(proc.stdout)
@@ -70,12 +84,21 @@ class ReadinessHookHarness(unittest.TestCase):
         self.assertIn(fragment, verdict["reason"])
         return verdict
 
+    def assert_pretool_blocked(self, proc, fragment):
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        verdict = json.loads(proc.stdout)
+        output = verdict["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "PreToolUse")
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertIn(fragment, output["permissionDecisionReason"])
+        return output
+
 
 class TestPreEditGate(ReadinessHookHarness):
     def test_unbound_source_edit_is_blocked(self):
         proc = self.run_hook("pre", self.event(self.project / "src" / "app.py"))
-        verdict = self.assert_blocked(proc, "no readiness task is bound")
-        self.assertIn("artifact-judge", verdict["reason"])
+        verdict = self.assert_pretool_blocked(proc, "no readiness task is bound")
+        self.assertIn("artifact-judge", verdict["permissionDecisionReason"])
 
     def test_valid_bound_assessment_allows_source_edit(self):
         self.bind_ready()
@@ -88,7 +111,7 @@ class TestPreEditGate(ReadinessHookHarness):
         with (self.task_dir / "task.md").open("a", encoding="utf-8") as stream:
             stream.write("\n- Clarification added after assessment.\n")
         proc = self.run_hook("pre", self.event(self.project / "src" / "app.py"))
-        self.assert_blocked(proc, "task.sha256")
+        self.assert_pretool_blocked(proc, "task.sha256")
 
     def test_workspace_authoring_is_allowed_before_binding(self):
         proc = self.run_hook("pre", self.event(self.task_dir / "notes.py"))
@@ -113,7 +136,7 @@ class TestPreEditGate(ReadinessHookHarness):
         for relative in protected:
             with self.subTest(relative=relative):
                 proc = self.run_hook("pre", self.event(self.project / relative))
-                self.assert_blocked(proc, "no readiness task is bound")
+                self.assert_pretool_blocked(proc, "no readiness task is bound")
 
     def test_explicit_project_document_exemptions_are_allowed(self):
         documents = (
@@ -138,7 +161,7 @@ class TestPreEditGate(ReadinessHookHarness):
     def test_document_target_outside_project_is_blocked(self):
         outside = Path(tempfile.mkdtemp()) / "README.md"
         proc = self.run_hook("pre", self.event(outside))
-        self.assert_blocked(proc, "outside the project")
+        self.assert_pretool_blocked(proc, "outside the project")
 
     def test_mixed_patch_with_a_protected_target_is_blocked(self):
         event = {
@@ -155,12 +178,12 @@ class TestPreEditGate(ReadinessHookHarness):
             },
         }
         proc = self.run_hook("pre", event)
-        self.assert_blocked(proc, "no readiness task is bound")
+        self.assert_pretool_blocked(proc, "no readiness task is bound")
 
     def test_guarded_path_outside_project_is_blocked(self):
         outside = Path(tempfile.mkdtemp()) / "outside.py"
         proc = self.run_hook("pre", self.event(outside))
-        self.assert_blocked(proc, "outside the project")
+        self.assert_pretool_blocked(proc, "outside the project")
 
     def test_edit_tool_without_a_target_fails_open_with_diagnostic(self):
         proc = self.run_hook("pre", self.event(tool_name="Edit", tool_input={}))
@@ -204,8 +227,9 @@ class TestPreEditGate(ReadinessHookHarness):
 
         self.assertEqual(return_code, 0)
         verdict = json.loads(output.getvalue())
-        self.assertEqual(verdict["decision"], "block")
-        self.assertIn("failed safely", verdict["reason"])
+        hook_output = verdict["hookSpecificOutput"]
+        self.assertEqual(hook_output["permissionDecision"], "deny")
+        self.assertIn("failed safely", hook_output["permissionDecisionReason"])
 
     def test_codex_apply_patch_command_payload_is_normalized(self):
         self.bind_ready()
@@ -248,7 +272,7 @@ class TestPostEditBinding(ReadinessHookHarness):
         proc = self.run_hook(
             "pre", self.event(self.project / "src" / "app.py", session_id="session-2")
         )
-        self.assert_blocked(proc, "no readiness task is bound")
+        self.assert_pretool_blocked(proc, "no readiness task is bound")
 
     def test_symlink_marker_is_rejected_without_overwrite(self):
         marker = marker_path(self.project, "session-1")
@@ -259,7 +283,7 @@ class TestPostEditBinding(ReadinessHookHarness):
 
         self.bind_ready()
         proc = self.run_hook("pre", self.event(self.project / "src" / "app.py"))
-        self.assert_blocked(proc, "unsafe readiness session marker")
+        self.assert_pretool_blocked(proc, "unsafe readiness session marker")
         self.assertEqual(outside.read_text(encoding="utf-8"), "DO_NOT_OVERWRITE")
 
     def test_symlink_task_directory_does_not_bind(self):
@@ -274,6 +298,37 @@ class TestPostEditBinding(ReadinessHookHarness):
         proc = self.run_hook("bind", self.event(linked / "assessment.json"))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse(marker_path(self.project, "session-1").exists())
+
+    def test_valid_inheritance_write_binds_child_task(self):
+        child, manifest = self.inherited_task()
+        proc = self.run_hook("bind", self.event(manifest))
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+        marker = marker_path(self.project, "session-1")
+        self.assertEqual(
+            json.loads(marker.read_text(encoding="utf-8")),
+            {"task_dir": "_workspace/child-task"},
+        )
+        allowed = self.run_hook("pre", self.event(self.project / "src" / "app.py"))
+        self.assertEqual(allowed.stdout.strip(), "")
+
+    def test_invalid_inheritance_does_not_bind(self):
+        child, manifest = self.inherited_task()
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+        value["flow_refs"] = ["P99"]
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        proc = self.run_hook("bind", self.event(manifest))
+        self.assert_blocked(proc, "readiness proof is not ready")
+        self.assertFalse(marker_path(self.project, "session-1").exists())
+
+    def test_parent_change_blocks_child_bound_session(self):
+        _, manifest = self.inherited_task()
+        proc = self.run_hook("bind", self.event(manifest))
+        self.assertEqual(proc.stdout.strip(), "")
+        with (self.task_dir / "implementation.md").open("a", encoding="utf-8") as stream:
+            stream.write("\n- parent changed after child binding\n")
+        blocked = self.run_hook("pre", self.event(self.project / "src" / "app.py"))
+        self.assert_pretool_blocked(blocked, "parent readiness")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+ANTIGRAVITY_MUTATORS = {
+    "write_to_file",
+    "replace_file_content",
+    "multi_replace_file_content",
+}
 
 
 def command_hooks(config):
@@ -58,6 +63,30 @@ class TestHookConfig(unittest.TestCase):
         self.assertIn("readiness_gate_hook.py", pre[0]["hooks"][0]["command"])
         self.assertIn("--mode pre", pre[0]["hooks"][0]["command"])
         self.assertIn("--mode bind", post[0]["hooks"][0]["command"])
+
+    def test_antigravity_plugin_packages_root_hooks(self):
+        hooks_path = ROOT / "hooks.json"
+        self.assertTrue(hooks_path.is_file(), "Antigravity plugins require root hooks.json")
+        config = self.load("hooks.json")
+        self.assertIn("agent-gate", config)
+
+    def test_antigravity_hooks_cover_every_file_mutator(self):
+        for relative in ("hooks.json", ".agents/hooks.json"):
+            with self.subTest(relative=relative):
+                hooks = self.load(relative)["agent-gate"]
+                for event in ("PreToolUse", "PostToolUse"):
+                    matcher = hooks[event][0]["matcher"]
+                    self.assertEqual(set(matcher.split("|")), ANTIGRAVITY_MUTATORS)
+
+    def test_implementation_edits_route_through_flow_design(self):
+        rules = self.load(".claude/skill-rules.json")["rules"]
+        matches = [rule for rule in rules
+                   if rule.get("require") == {"skill": "flow-design"}
+                   and "input_pattern" in rule.get("when", {})]
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]["when"].get("tool"), "Write|Edit")
+        self.assertRegex('"/project/_workspace/change/implementation.md"',
+                         matches[0]["when"]["input_pattern"])
 
 
 if __name__ == "__main__":

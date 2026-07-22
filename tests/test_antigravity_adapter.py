@@ -19,6 +19,11 @@ ADAPTER = Path(__file__).resolve().parent.parent / "hooks" / "antigravity_adapte
 # real hooks. BLOCK echoes a Claude-contract block; PASS stays silent; DUMP
 # writes its received stdin to a path so we can assert the translation.
 BLOCK = "import sys,json; print(json.dumps({'decision':'block','reason':'nope'}))"
+PRETOOL_BLOCK = (
+    "import json; print(json.dumps({'hookSpecificOutput': {"
+    "'hookEventName': 'PreToolUse', 'permissionDecision': 'deny', "
+    "'permissionDecisionReason': 'not ready'}}))"
+)
 PASS = "import sys; sys.stdin.read()"
 DUMP_TMPL = "import sys; open({!r},'w').write(sys.stdin.read())"
 
@@ -57,6 +62,16 @@ class PreToolUseOutputTest(unittest.TestCase):
     def test_no_block_becomes_allow(self):
         proc = run("pretooluse", [sys.executable, "-c", PASS], {"workspacePaths": ["/p"]})
         self.assertEqual(json.loads(proc.stdout)["decision"], "allow")
+
+    def test_claude_pretool_deny_becomes_antigravity_deny(self):
+        proc = run(
+            "pretooluse",
+            [sys.executable, "-c", PRETOOL_BLOCK],
+            {"workspacePaths": ["/p"]},
+        )
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["decision"], "deny")
+        self.assertEqual(verdict["reason"], "not ready")
 
 
 class StopOutputTest(unittest.TestCase):

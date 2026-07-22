@@ -15,6 +15,13 @@ class TestSkillPackaging(unittest.TestCase):
         self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
         self.assertTrue((codex_entry / "SKILL.md").is_file())
 
+    def test_artifact_judge_documents_inherited_child_readiness(self):
+        skill = (ROOT / ".claude" / "skills" / "artifact-judge" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("inherited-readiness.json", skill)
+        self.assertIn("--inherit-from", skill)
+
 
 if __name__ == "__main__":
     unittest.main()

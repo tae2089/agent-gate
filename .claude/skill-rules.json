@@ -41,6 +41,15 @@
       "require": { "skill": "flow-design" }
     },
     {
+      "id": "implementation-edits-need-flow-design",
+      "when": {
+        "tool": "Write|Edit",
+        "input_pattern": "implementation\\.md\""
+      },
+      "require": { "skill": "flow-design" },
+      "message": "Full-tier implementation design requires numbered pseudocode and a control-flow Mermaid diagram"
+    },
+    {
       "id": "dispatch-packet-needs-execute-dispatch-unit",
       "when": {
         "prompt_pattern": "(unit_id|allowed_scope|return_contract|acceptance_criteria)"

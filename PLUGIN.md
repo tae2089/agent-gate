@@ -78,6 +78,12 @@ to every project you install the plugin into.
 - If you also want per-project rules on top of the global set, point `--rules`
   at a project file instead, or ask for merge support (plugin + project).
 
+Readiness inheritance is host-neutral: a decomposed child writes
+`_workspace/<child>/inherited-readiness.json` referencing a ready direct Full
+parent and its P/AC scope. The same PostToolUse/PreToolUse hooks bind and
+revalidate it on Claude Code, Codex, and Antigravity; unit size never creates a
+Fast source-edit bypass.
+
 ## Companion skills (for others installing this)
 
 The default `.claude/skill-rules.json` requires skills that live in a separate

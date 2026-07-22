@@ -52,10 +52,10 @@ ARTIFACT>>>
 | implementation.md | 대상 diff/코드 + task.md의 계약 |
 | dispatch plan | 원 목표 + 각 유닛의 실제 파일 범위 |
 
-## implementation.md: flowchart 컨벤션
+## implementation.md: flow-design gate
 
-- **컨벤션(작성자)**: 로직이 **비자명**하면 — flow-design 임계 기준으로 non-validation 분기 ≥ 3개 **또는** 부수효과(WRITE/외부 CALL/PUBLISH) ≥ 2개 — implementation.md에 mermaid flowchart를 포함한다. 자명한 변경(설정·한 파일·기계적 수정)엔 넣지 않는다. 다이어그램이 필요할 만큼 복잡하면 오히려 flow-design 스킬을 써서 그리는 게 낫다.
-- **tier-2 판정 반영**: implementation.md를 채점할 때, 위 임계를 넘는 비자명 로직인데 flowchart가 없으면 **actionability 감점 근거**로 삼는다(다음 사람이 분기·흐름을 텍스트만으로 재구성해야 함). 자명한 변경에서 flowchart 부재는 감점 대상 아님 — 필요 없는데 그린 ceremony는 오히려 actionability에 무관하거나 소폭 감점. 이 판단은 결정론 lint가 아니라 판정자 몫이다(warrant를 코드가 못 잼).
+- **tier-1 강제**: Full root는 `flow-design`을 호출해 `implementation.md`에 fenced 번호형 수도코드(`P1`, `P2`, ...)와 fenced 제어 흐름 Mermaid를 모두 넣는다. 어느 하나라도 없으면 structural lint의 0점 floor가 실패한다. 분해된 자식은 설계를 생략하거나 축약하지 않고 `inherited-readiness.json`의 실제 P/AC 참조로 이 흐름을 상속한다.
+- **tier-2 판정 반영**: 블록이 있다는 사실은 완전성을 보장하지 않는다. 수도코드의 모든 분기와 WRITE/외부 CALL/PUBLISH 실패 경로가 닫혔는지, Mermaid의 결정 노드·분기 arm·terminal이 수도코드와 대응하는지를 actionability와 risk-response 근거로 판정한다. 의미가 빈약한 의식적 다이어그램은 가점하지 않는다.
 
 ## 한계 (정직하게)
 
