@@ -1,5 +1,5 @@
 {
   "name": "agent-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deterministic enforcement for coding agents: verify required skills, preserve handoffs, gate source edits on readiness, and enforce reviewed cross-language scenarios. (Antigravity extension manifest.)"
 }
