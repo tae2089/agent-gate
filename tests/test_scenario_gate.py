@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from scenario_helpers import (
+    digest,
     parent_contract,
     write_child_project,
     write_child_scenarios,
@@ -59,7 +60,6 @@ class ScenarioContractTest(unittest.TestCase):
             from readiness_helpers import write_ready_artifacts
 
             write_ready_artifacts(outside)
-            write_parent_scenarios(outside)
             result = validate_readiness(outside, self.project)
         self.assertFalse(result.allowed)
         self.assertTrue(any("_workspace" in error for error in result.errors), result.errors)
@@ -94,6 +94,11 @@ class ScenarioContractTest(unittest.TestCase):
         for contract, fragment in cases:
             with self.subTest(fragment=fragment):
                 self.assert_invalid_contract(contract, fragment)
+
+    def test_critical_scenario_requires_an_exclusive_runner(self):
+        contract = parent_contract()
+        contract["scenarios"][1]["runner"] = "integration"
+        self.assert_invalid_contract(contract, "critical runner integration must be exclusive")
 
 
 class ScenarioReviewTest(unittest.TestCase):
@@ -138,6 +143,10 @@ class ScenarioReviewTest(unittest.TestCase):
         stale_subject["subject_sha256"] = "0" * 64
         mutations.append((stale_subject, "subject_sha256 is stale"))
 
+        stale_runner_config = self.review()
+        stale_runner_config["runner_config_sha256"] = "0" * 64
+        mutations.append((stale_runner_config, "runner_config_sha256 is stale"))
+
         wrong_parent = self.review()
         wrong_parent["parent_contract_sha256"] = "0" * 64
         mutations.append((wrong_parent, "parent_contract_sha256 must be empty"))
@@ -163,6 +172,20 @@ class ScenarioReviewTest(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 write_parent_scenarios(self.task_dir)
                 self.assert_invalid_review(review, fragment)
+
+    def test_review_becomes_stale_after_runner_config_change(self):
+        policy_path = self.project / ".agent-gate" / "scenario-gate.json"
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy["runners"]["integration"]["timeout_seconds"] = 31
+        write_json(policy_path, policy)
+
+        result = validate_readiness(self.task_dir, self.project)
+
+        self.assertFalse(result.allowed, result)
+        self.assertTrue(
+            any("runner_config_sha256 is stale" in error for error in result.errors),
+            result.errors,
+        )
 
 
 class ChildScenarioOverlayTest(unittest.TestCase):
@@ -234,6 +257,23 @@ class ChildScenarioOverlayTest(unittest.TestCase):
                 write_child_scenarios(self.parent, self.child)
                 self.assert_invalid_overlay(overlay, fragment)
 
+    def test_child_cannot_reuse_an_inherited_critical_runner(self):
+        overlay = self.overlay()
+        overlay["local_scenarios"][0]["runner"] = "critical"
+        write_json(self.overlay_path, overlay)
+        review_path = self.child / "scenario-review.json"
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+        review["subject_sha256"] = digest(self.overlay_path)
+        write_json(review_path, review)
+
+        result = validate_readiness(self.child, self.project)
+
+        self.assertFalse(result.allowed, result)
+        self.assertTrue(
+            any("critical runner critical must be exclusive" in error for error in result.errors),
+            result.errors,
+        )
+
 
 class ScenarioGateCliTest(unittest.TestCase):
     def setUp(self):
@@ -271,6 +311,10 @@ class ScenarioGateCliTest(unittest.TestCase):
         self.assertEqual(
             template["reviewed_scenarios"],
             ["S-ALLOW-READY", "S-BLOCK-STALE"],
+        )
+        self.assertEqual(
+            template["runner_config_sha256"],
+            digest(self.project / ".agent-gate" / "scenario-gate.json"),
         )
 
         template["verdict"] = "pass"

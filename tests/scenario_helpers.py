@@ -54,6 +54,7 @@ def parent_contract() -> dict:
                 acceptance=["AC-1"],
                 flow=["P2"],
                 risk="critical",
+                runner="critical",
             ),
         ],
     }
@@ -67,6 +68,9 @@ def review_for(task_dir: Path, subject_path: Path, scenario_ids: list[str]) -> d
         "flow_sha256": digest(implementation),
         "subject_sha256": digest(subject_path),
         "parent_contract_sha256": "",
+        "runner_config_sha256": digest(
+            task_dir.parent.parent / ".agent-gate" / "scenario-gate.json"
+        ),
         "reviewed_scenarios": scenario_ids,
         "verdict": "pass",
         "blocking_findings": [],
@@ -75,14 +79,13 @@ def review_for(task_dir: Path, subject_path: Path, scenario_ids: list[str]) -> d
 
 def write_policy(project: Path, *, mode: str = "enforce", runners: dict | None = None) -> Path:
     if runners is None:
-        runners = {
-            "integration": {
-                "command": ["python3", "-c", "raise SystemExit(0)"],
-                "format": "exit-code",
-                "timeout_seconds": 30,
-                "max_output_bytes": 65536,
-            }
+        definition = {
+            "command": ["python3", "-c", "raise SystemExit(0)"],
+            "format": "exit-code",
+            "timeout_seconds": 30,
+            "max_output_bytes": 65536,
         }
+        runners = {"integration": definition, "critical": definition}
     path = project / ".agent-gate" / "scenario-gate.json"
     write_json(path, {"schema_version": 1, "mode": mode, "runners": runners})
     return path
@@ -134,6 +137,9 @@ def write_child_scenarios(parent: Path, child: Path, *, ownership: str = "child"
         "flow_sha256": digest(parent / "implementation.md"),
         "subject_sha256": digest(overlay_path),
         "parent_contract_sha256": digest(contract_path),
+        "runner_config_sha256": digest(
+            child.parent.parent / ".agent-gate" / "scenario-gate.json"
+        ),
         "reviewed_scenarios": ["S-BLOCK-STALE", "S-CHILD-LOCAL"],
         "verdict": "pass",
         "blocking_findings": [],

@@ -123,6 +123,9 @@ project-locally instead. If you only want a subset, use `-s` (or trim the rules)
 - Scenario runner commands are trusted repository configuration. The plugin
   removes most inherited environment variables and never uses a shell, but it
   does not provide an OS-level network sandbox.
+- Critical scenarios require exclusive runners. Independent scenario review is
+  bound to the runner configuration and rejects unproven command coverage or
+  zero-test success behavior.
 - The repo's workspace configs (`.claude/settings.json`, `.codex/hooks.json`,
   `.agents/hooks.json`) are for dogfooding agent-gate on itself and are separate
   from these plugin manifests.

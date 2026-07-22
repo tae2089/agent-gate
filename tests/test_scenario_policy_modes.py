@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sys
 import tempfile
@@ -10,8 +11,10 @@ from pathlib import Path
 
 from scenario_helpers import (
     init_git_project,
+    parent_contract,
     write_child_project,
     write_parent_project,
+    write_parent_scenarios,
     write_policy,
 )
 
@@ -84,6 +87,34 @@ class RolloutModeTest(unittest.TestCase):
         completion = validate_completion(task, self.project)
         self.assertFalse(completion.allowed)
         self.assertTrue(any("S-ALLOW-READY" in error for error in completion.errors))
+
+    def test_large_standard_runner_group_warns_without_blocking(self):
+        task = write_parent_project(self.project, mode="enforce")
+        contract = parent_contract()
+        for item in contract["scenarios"]:
+            item["risk"] = "standard"
+            item["runner"] = "integration"
+        for index in range(3, 7):
+            item = copy.deepcopy(contract["scenarios"][0])
+            item["id"] = f"S-STANDARD-{index}"
+            contract["scenarios"].append(item)
+        write_parent_scenarios(task, contract)
+
+        readiness = validate_readiness(task, self.project)
+        self.assertTrue(readiness.allowed, readiness.errors)
+        self.assertTrue(
+            any("integration" in warning and "6 scenarios" in warning for warning in readiness.warnings),
+            readiness.warnings,
+        )
+
+        init_git_project(self.project)
+        self.assertTrue(run_scenarios(task, self.project).result_written)
+        completion = validate_completion(task, self.project)
+        self.assertTrue(completion.allowed, completion.errors)
+        self.assertTrue(
+            any("integration" in warning and "6 scenarios" in warning for warning in completion.warnings),
+            completion.warnings,
+        )
 
     def test_parent_candidate_blocks_enforce_but_not_critical_mode(self):
         for mode, expected in (("critical-enforce", True), ("enforce", False)):

@@ -20,7 +20,7 @@ python3 scripts/scenario_gate.py readiness _workspace/<task> --project-root .
 문서를 작성하지 않았고 작성 대화를 모른다.
 
 제공된 task.md Contract/AC, implementation.md Pseudocode, scenario-contract.json
-또는 child scenario-overlay.json, review template만 사용한다.
+또는 child scenario-overlay.json, `.agent-gate/scenario-gate.json`, review template만 사용한다.
 
 다음을 검토하라.
 - 모든 AC와 중요한 성공/실패/거부/복구 terminal이 최소 시나리오 집합에 포함되는가?
@@ -28,9 +28,12 @@ python3 scripts/scenario_gate.py readiness _workspace/<task> --project-root .
 - 같은 결과를 반복하거나 P 단계마다 억지 시나리오를 만들지 않았는가?
 - child ownership이 parent-candidate를 숨기거나 불필요하게 승격하지 않는가?
 - runner level이 해당 행동을 검증할 수 있는 가장 저렴한 경계인가?
+- 각 runner command가 할당된 모든 scenario를 실제로 선택한다는 근거가 있는가?
+- 의도한 테스트가 없거나 선택되지 않았을 때 runner가 성공 종료하지 않는가?
 
-차단 문제가 하나라도 있으면 verdict를 revise로 유지하고 blocking_findings에
-구체적인 scenario ID와 누락 terminal을 적어라. 문제가 없을 때만 verdict를 pass로
+command coverage나 zero-test 실패 여부를 입증할 수 없는 경우를 포함해 차단 문제가
+하나라도 있으면 verdict를 revise로 유지하고 blocking_findings에
+구체적인 scenario ID/runner와 누락 terminal 또는 증거를 적어라. 문제가 없을 때만 verdict를 pass로
 바꾸고 findings를 비워라. template의 hash와 reviewed_scenarios는 변경하지 마라.
 완성된 JSON 객체만 반환하라.
 ```
@@ -44,6 +47,7 @@ python3 scripts/scenario_gate.py readiness _workspace/<task> --project-root .
   "flow_sha256": "<template>",
   "subject_sha256": "<template>",
   "parent_contract_sha256": "<template or empty parent value>",
+  "runner_config_sha256": "<template>",
   "reviewed_scenarios": ["<template IDs>"],
   "verdict": "pass",
   "blocking_findings": []
@@ -54,5 +58,5 @@ python3 scripts/scenario_gate.py readiness _workspace/<task> --project-root .
 
 - 작성 AI는 contract/overlay를 제안한다.
 - 독립 판정자는 의미 결함만 제안하고 테스트 성공을 선언하지 않는다.
-- `scenario_gate.py`가 hash, 참조, 실행 결과와 rollout mode를 최종 판정한다.
+- `scenario_gate.py`가 runner config를 포함한 hash, 참조, 실행 결과와 rollout mode를 최종 판정한다.
 - 성공 결과가 있어도 잘못된 요구사항을 증명하지는 못하므로 고위험 AC는 사용자 또는 도메인 승인 정책을 별도로 둔다.

@@ -16,9 +16,9 @@ review to `docs/scenario-assessment.md`. Route every other artifact to
 
 ## Scenario Review Procedure
 
-1. **Resolve the subject.** Identify one parent `scenario-contract.json` or child `scenario-overlay.json`, its task directory, project root, task Contract/AC, and the direct Full parent's Pseudocode. Done when: every exact path is known.
+1. **Resolve the subject.** Identify one parent `scenario-contract.json` or child `scenario-overlay.json`, its task directory, project root, `.agent-gate/scenario-gate.json`, task Contract/AC, and the direct Full parent's Pseudocode. Done when: every exact path is known.
 2. **Run deterministic preflight.** Run `scripts/scenario_gate.py review-template <task-dir> --project-root <root>`. Stop on schema, reference, scope, runner, parent, or hash errors. Done when: one current JSON template is captured.
-3. **Judge independently.** Launch a fresh context with only the source sections, scenario subject, template, and prompt from `docs/scenario-assessment.md`. Require JSON only; never include implementation code, authoring conversation, or successful runner logs. Done when: a JSON reply is captured.
+3. **Judge independently.** Launch a fresh context with only the source sections, scenario subject, runner configuration, template, and prompt from `docs/scenario-assessment.md`. Require JSON only; never include implementation code, authoring conversation, or successful runner logs. Done when: a JSON reply is captured.
 4. **Write the bound review.** Write the unchanged hashes and reviewed ID set plus the independent verdict to `<task-dir>/scenario-review.json`. Never change expected outcomes merely to obtain pass. Done when: the file exists.
 5. **Validate.** Run `scripts/scenario_gate.py readiness <task-dir> --project-root <root>`. On failure, fix the named semantic or structural gap and restart at template generation. Done when: the command exits 0.
 

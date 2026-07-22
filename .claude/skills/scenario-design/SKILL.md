@@ -9,11 +9,11 @@ Create the smallest executable behavior contract that covers the declared flow. 
 
 ## Procedure
 
-1. Resolve the exact task directory. For a parent read only `task.md` Contract/AC and `implementation.md` Pseudocode; for a child also read `inherited-readiness.json`, the parent's scenario titles, and the assigned P/AC scope. Done when every source path is known.
+1. Resolve the exact task directory and `.agent-gate/scenario-gate.json`. For a parent read only `task.md` Contract/AC and `implementation.md` Pseudocode; for a child also read `inherited-readiness.json`, the parent's scenario titles, and the assigned P/AC scope. Done when every source path is known.
 2. Use the `flow-design` skill if available to close missing branch and side-effect failure arms before extracting scenarios. Do not turn an unhandled arm into intended behavior. Done when every scenario points to an observable terminal.
 3. Build the smallest arm-covering set. Each scenario has one event, 3-5 Given/When/Then steps total where practical, and asserts public output, persisted state, or emitted events rather than functions, mocks, or call order. Add extra cases only for later failure after an earlier side effect, concurrency, repeated calls, authorization, or data integrity.
 4. For a parent write strict `scenario-contract.json`. For a child inherit only real parent IDs and write new cases to `scenario-overlay.json`; set `ownership` to `parent-candidate` when the behavior survives replacing the child implementation, can affect siblings, is visible at the parent boundary, or protects security/data integrity. Otherwise use `child`.
-5. Run `python3 scripts/scenario_gate.py review-template <task-dir> --project-root <root>`. Fix schema, AC/P scope, runner, duplicate, and hash errors; do not edit generated hashes. Done when a review template is emitted.
+5. Run `python3 scripts/scenario_gate.py review-template <task-dir> --project-root <root>`. Fix schema, AC/P scope, runner, duplicate, grouping, and hash errors; do not edit generated hashes. A critical scenario requires an exclusive runner; treat a standard runner warning as a prompt to split only when it spans different observable flows. Done when a review template is emitted.
 6. Use the `artifact-judge` skill's scenario review procedure. Do not implement protected code until `python3 scripts/scenario_gate.py readiness <task-dir> --project-root <root>` exits 0.
 
 ## Boundaries
@@ -27,7 +27,7 @@ Create the smallest executable behavior contract that covers the declared flow. 
 ## Completion Criteria
 
 - Every task AC is covered and every referenced P/AC exists in the assigned scope.
-- Every scenario has a configured runner, observable Then, and no implementation identifiers.
+- Every scenario has a configured runner, observable Then, and no implementation identifiers; the runner command covers its assigned scenarios and fails clearly when its intended tests are absent.
 - The parent contract or child overlay passes deterministic template generation.
 - `scenario-review.json` is independently produced and current.
 - Scenario readiness exits 0 before implementation begins.

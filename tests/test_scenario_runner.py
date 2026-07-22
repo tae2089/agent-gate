@@ -34,7 +34,11 @@ class ScenarioRunnerTest(unittest.TestCase):
         self.temp.cleanup()
 
     def configure(self, runner: dict) -> None:
-        write_policy(self.project, runners={"integration": runner})
+        write_policy(
+            self.project,
+            runners={"integration": runner, "critical": runner},
+        )
+        write_parent_scenarios(self.task_dir)
 
     def result(self) -> dict:
         return json.loads(

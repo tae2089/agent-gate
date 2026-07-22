@@ -33,6 +33,7 @@ RESULT_FILENAME = "scenario-result.json"
 MODES = frozenset({"advisory", "critical-enforce", "enforce"})
 RISKS = frozenset({"standard", "critical"})
 LEVELS = frozenset({"in-process", "integration", "e2e"})
+STANDARD_RUNNER_WARNING_THRESHOLD = 5
 SAFE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 SCENARIO_ID = re.compile(r"S-[A-Z0-9][A-Z0-9-]*")
 
@@ -93,6 +94,7 @@ REVIEW_FIELDS = frozenset(
         "flow_sha256",
         "subject_sha256",
         "parent_contract_sha256",
+        "runner_config_sha256",
         "reviewed_scenarios",
         "verdict",
         "blocking_findings",
@@ -370,6 +372,7 @@ def _validate_review(
     subject_content: bytes | None,
     scenarios: tuple[dict[str, Any], ...],
     parent_contract_sha256: str,
+    runner_config_sha256: str,
     errors: list[str],
 ) -> None:
     loaded = _load_json(task_dir / REVIEW_FILENAME, REVIEW_FILENAME, errors)
@@ -399,6 +402,8 @@ def _validate_review(
             errors.append("scenario review parent_contract_sha256 is stale")
         else:
             errors.append("scenario review parent_contract_sha256 must be empty for a parent task")
+    if review.get("runner_config_sha256") != runner_config_sha256:
+        errors.append("scenario review runner_config_sha256 is stale")
 
     reviewed = _string_list(
         review.get("reviewed_scenarios"),
@@ -480,6 +485,7 @@ def _child_scenarios(
         parent_content,
         parent_scenarios,
         "",
+        policy.sha256,
         errors,
     )
     overlay_loaded = _load_json(child / OVERLAY_FILENAME, OVERLAY_FILENAME, errors)
@@ -551,6 +557,7 @@ def _child_scenarios(
             overlay_content,
             tuple(effective),
             parent_sha256,
+            policy.sha256,
             errors,
         )
     return _ResolvedScenarioSet(
@@ -559,6 +566,37 @@ def _child_scenarios(
         subject_content=overlay_content,
         parent_contract_sha256=parent_sha256,
     )
+
+
+def _runner_group_findings(
+    scenarios: tuple[dict[str, Any], ...],
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    errors: list[str] = []
+    warnings: list[str] = []
+    for scenario in scenarios:
+        runner = scenario.get("runner")
+        if isinstance(runner, str):
+            grouped.setdefault(runner, []).append(scenario)
+    for runner, assigned in grouped.items():
+        if len(assigned) > 1 and any(
+            scenario.get("risk") == "critical" for scenario in assigned
+        ):
+            scenario_ids = sorted(
+                scenario["id"]
+                for scenario in assigned
+                if isinstance(scenario.get("id"), str)
+            )
+            errors.append(
+                f"critical runner {runner} must be exclusive; assigned scenarios: "
+                + ", ".join(scenario_ids)
+            )
+        elif len(assigned) > STANDARD_RUNNER_WARNING_THRESHOLD:
+            warnings.append(
+                f"standard runner {runner} covers {len(assigned)} scenarios; "
+                "review whether it should be split by observable flow"
+            )
+    return tuple(errors), tuple(warnings)
 
 
 def _resolve_scenario_set(
@@ -577,6 +615,7 @@ def _resolve_scenario_set(
             validate_subject_review=validate_review_artifact,
         )
         if resolved is not None:
+            errors.extend(_runner_group_findings(resolved.scenarios)[0])
             return resolved
         return _ResolvedScenarioSet((), task / "implementation.md", None, "")
     scenarios, contract_content = _parent_contract(task, policy, errors)
@@ -587,14 +626,17 @@ def _resolve_scenario_set(
             contract_content,
             scenarios,
             "",
+            policy.sha256,
             errors,
         )
-    return _ResolvedScenarioSet(
+    resolved = _ResolvedScenarioSet(
         scenarios=scenarios,
         flow_path=task / "implementation.md",
         subject_content=contract_content,
         parent_contract_sha256="",
     )
+    errors.extend(_runner_group_findings(resolved.scenarios)[0])
+    return resolved
 
 
 def _project_task_dir(
@@ -640,6 +682,7 @@ def validate_readiness(task_dir: Path | str, project_root: Path | str) -> Scenar
     if not readiness.ready:
         errors.extend(f"task readiness: {error}" for error in readiness.errors)
     scenarios = _resolve_scenario_set(task, policy, errors).scenarios
+    warnings = list(_runner_group_findings(scenarios)[1])
     all_ids = tuple(
         scenario["id"] for scenario in scenarios if isinstance(scenario.get("id"), str)
     )
@@ -653,13 +696,15 @@ def validate_readiness(task_dir: Path | str, project_root: Path | str) -> Scenar
         else all_ids
     )
     if policy.mode == "advisory":
-        return ScenarioGateResult(True, True, policy.mode, (), tuple(errors), all_ids)
+        return ScenarioGateResult(
+            True, True, policy.mode, (), tuple(errors + warnings), all_ids
+        )
     return ScenarioGateResult(
         True,
         not errors,
         policy.mode,
         tuple(errors),
-        (),
+        tuple(warnings),
         required,
     )
 
@@ -993,6 +1038,7 @@ def validate_completion(
     if not readiness.ready:
         errors.extend(f"task readiness: {error}" for error in readiness.errors)
     scenarios = _resolve_scenario_set(task, policy, errors).scenarios
+    warnings.extend(_runner_group_findings(scenarios)[1])
     effective_ids = tuple(
         scenario["id"] for scenario in scenarios if isinstance(scenario.get("id"), str)
     )
@@ -1101,6 +1147,7 @@ def review_template(task_dir: Path | str, project_root: Path | str) -> dict[str,
         "flow_sha256": flow_sha256,
         "subject_sha256": subject_sha256,
         "parent_contract_sha256": resolved.parent_contract_sha256,
+        "runner_config_sha256": policy.sha256,
         "reviewed_scenarios": [
             scenario["id"]
             for scenario in resolved.scenarios
