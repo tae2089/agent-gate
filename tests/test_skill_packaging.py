@@ -16,14 +16,11 @@ class TestSkillPackaging(unittest.TestCase):
             self.assertNotIn("UserPromptSubmit", config, relative)
             self.assertNotIn("prompt_router", config, relative)
 
-    def test_default_rules_only_enforce_independent_semantic_judgment(self):
+    def test_default_rules_only_enforce_requested_artifact_scoring(self):
         data = json.loads((ROOT / ".claude" / "skill-rules.json").read_text(encoding="utf-8"))
         self.assertEqual(
             [rule["id"] for rule in data["rules"]],
-            [
-                "artifact-scoring-needs-artifact-judge",
-                "scenario-evidence-edits-need-artifact-judge",
-            ],
+            ["artifact-scoring-needs-artifact-judge"],
         )
 
     def test_codex_artifact_judge_is_symlinked_to_claude_canonical_directory(self):
@@ -48,19 +45,28 @@ class TestSkillPackaging(unittest.TestCase):
         self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
         skill = (canonical / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("scenario-contract.json", skill)
-        self.assertIn("atomic observation", skill)
+        self.assertIn("plain observable expectations", skill)
         self.assertIn("exclusive", skill)
         self.assertIn("3-5", skill)
         self.assertIn("Completion Criteria", skill)
 
-    def test_artifact_judge_routes_scenario_evidence_to_dedicated_procedure(self):
-        skill = (ROOT / ".claude" / "skills" / "artifact-judge" / "SKILL.md").read_text(
+    def test_scenario_completion_does_not_route_through_artifact_judge(self):
+        judge = (ROOT / ".claude" / "skills" / "artifact-judge" / "SKILL.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("scenario-evidence.json", skill)
-        self.assertIn("evidence-template", skill)
-        self.assertIn("docs/scenario-assessment.md", skill)
-        self.assertTrue((ROOT / "docs" / "scenario-assessment.md").is_file())
+        scenario = (ROOT / ".claude" / "skills" / "scenario-design" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("scenario-evidence.json", judge)
+        self.assertNotIn("evidence-template", judge)
+        self.assertNotIn("Scenario Evidence Procedure", judge)
+        self.assertNotIn("artifact-judge", scenario)
+        self.assertFalse((ROOT / "docs" / "scenario-assessment.md").exists())
+
+        for relative in ("README.md", "PLUGIN.md", "docs/feature-audit.html"):
+            content = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn("scenario-evidence", content, relative)
+            self.assertNotIn("evidence-template", content, relative)
 
 
 if __name__ == "__main__":

@@ -7,15 +7,6 @@
       },
       "require": { "skill": "artifact-judge" },
       "message": "artifact quality scoring must run through the two-tier judge, not ad-hoc opinion"
-    },
-    {
-      "id": "scenario-evidence-edits-need-artifact-judge",
-      "when": {
-        "tool": "Write|Edit",
-        "input_pattern": "scenario-evidence\\.json\""
-      },
-      "require": { "skill": "artifact-judge" },
-      "message": "scenario-evidence.json must come from an independent artifact-judge procedure"
     }
   ]
 }

@@ -9,25 +9,21 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from readiness_helpers import write_ready_artifacts
 from scenario_helpers import (
-    digest,
     init_git_project,
     parent_contract,
     write_child_project,
-    write_json,
     write_parent_project,
     write_parent_scenarios,
-    write_passing_evidence,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "scenario_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from scenario_gate import evidence_template, validate_readiness  # noqa: E402
+from scenario_gate import validate_readiness  # noqa: E402
 
 
 class ScenarioContractTest(unittest.TestCase):
@@ -56,7 +52,7 @@ class ScenarioContractTest(unittest.TestCase):
             result.required_scenarios,
             ("S-ALLOW-READY", "S-BLOCK-STALE"),
         )
-        self.assertIsNone(result.coverage)
+        self.assertIsNone(result.trace_completeness)
 
     def test_full_task_outside_project_workspace_is_rejected(self):
         with tempfile.TemporaryDirectory() as outside_directory:
@@ -80,9 +76,11 @@ class ScenarioContractTest(unittest.TestCase):
         duplicate_scenario["scenarios"][-1]["runner"] = "stale-check"
         cases.append((duplicate_scenario, "duplicate scenario id"))
 
-        duplicate_observation = parent_contract()
-        duplicate_observation["scenarios"][1]["then"][0]["id"] = "O-ALLOW-READY"
-        cases.append((duplicate_observation, "duplicate observation id"))
+        legacy_observation = parent_contract()
+        legacy_observation["scenarios"][0]["then"] = [
+            {"id": "O-ALLOW-READY", "expectation": "an obsolete shape"}
+        ]
+        cases.append((legacy_observation, "then contains an invalid string"))
 
         missing_ac = parent_contract()
         missing_ac["scenarios"][1]["covers"]["acceptance"] = ["AC-2"]
@@ -131,7 +129,6 @@ class ParentCompletionBoundaryValidationTest(unittest.TestCase):
         for filename in (
             "scenario-overlay.json",
             "scenario-contract.json",
-            "scenario-evidence.json",
             "scenario-result.json",
         ):
             with self.subTest(filename=filename):
@@ -141,6 +138,13 @@ class ParentCompletionBoundaryValidationTest(unittest.TestCase):
                 self.assertFalse(result.allowed)
                 self.assertTrue(any(filename in error for error in result.errors))
                 path.unlink()
+
+    def test_child_ignores_obsolete_scenario_evidence(self):
+        (self.child / "scenario-evidence.json").write_text("not json", encoding="utf-8")
+
+        result = validate_readiness(self.child, self.project)
+
+        self.assertTrue(result.allowed, result.errors)
 
 
 class ScenarioGateCliTest(unittest.TestCase):
@@ -169,48 +173,21 @@ class ScenarioGateCliTest(unittest.TestCase):
             timeout=30,
         )
 
-    def test_evidence_template_binds_current_artifacts_without_runner_review(self):
-        template = evidence_template(self.task_dir, self.project)
-        self.assertEqual(template["verdict"], "revise")
-        self.assertTrue(template["blocking_findings"])
-        self.assertEqual(
-            [item["id"] for item in template["observations"]],
-            ["O-ALLOW-READY", "O-BLOCK-STALE"],
-        )
-        self.assertEqual(template["contract_sha256"], digest(self.task_dir / "scenario-contract.json"))
-        self.assertNotIn("runner_config_sha256", template)
-
+    def test_removed_evidence_template_cli_is_rejected(self):
         process = self.cli("evidence-template")
-        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
-        self.assertEqual(json.loads(process.stdout), template)
 
-    def test_evidence_template_rejects_unsafe_parent_before_reading_it(self):
-        child = write_child_project(self.task_dir)
-        inheritance_path = child / "inherited-readiness.json"
-        inheritance = json.loads(inheritance_path.read_text(encoding="utf-8"))
-        inheritance["parent_task"] = "../outside-parent"
-        write_json(inheritance_path, inheritance)
-        outside_contract = self.project / "outside-parent" / "scenario-contract.json"
-        outside_contract.parent.mkdir(parents=True)
-        outside_contract.write_text("SENSITIVE", encoding="utf-8")
-        original_read_bytes = Path.read_bytes
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIn("invalid choice", process.stderr)
 
-        def guarded_read_bytes(path: Path) -> bytes:
-            if path.resolve() == outside_contract.resolve():
-                raise AssertionError("unsafe parent content was read")
-            return original_read_bytes(path)
-
-        with patch.object(Path, "read_bytes", guarded_read_bytes):
-            with self.assertRaises(ValueError):
-                evidence_template(child, self.project)
-
-    def test_run_and_completion_cli_return_coverage_status(self):
-        write_passing_evidence(self.task_dir, self.project)
+    def test_run_and_completion_cli_return_trace_status_without_evidence(self):
         run = self.cli("run", "--json")
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         value = json.loads(run.stdout)
         self.assertTrue(value["result_written"])
-        self.assertEqual(value["completion"]["coverage"]["percentage"], 100.0)
+        self.assertEqual(
+            value["completion"]["trace_completeness"]["percentage"],
+            100.0,
+        )
         complete = self.cli("completion", "--json")
         self.assertEqual(complete.returncode, 0, complete.stdout + complete.stderr)
         self.assertTrue(json.loads(complete.stdout)["allowed"])

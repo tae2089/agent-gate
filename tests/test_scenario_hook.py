@@ -14,7 +14,6 @@ from readiness_helpers import write_ready_artifacts
 from scenario_helpers import (
     init_git_project,
     write_parent_project,
-    write_passing_evidence,
     write_policy,
 )
 
@@ -108,13 +107,12 @@ class ScenarioHookTest(unittest.TestCase):
         self.assert_block(process, "scenario")
         self.assertFalse(marker_path(self.project).exists())
 
-    def test_stop_blocks_until_current_evidence_and_result_exist(self):
+    def test_stop_blocks_until_current_result_exists(self):
         task = write_parent_project(self.project)
         self.assertEqual(self.bind(task / "scenario-contract.json").stdout.strip(), "")
         init_git_project(self.project)
         self.assert_block(self.stop(), "scenario completion")
 
-        write_passing_evidence(task, self.project)
         run = run_scenarios(task, self.project)
         self.assertTrue(run.result_written, run.errors)
         completed = self.stop()

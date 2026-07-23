@@ -1,6 +1,6 @@
 ---
 name: scenario-design
-description: Create or refine a Full parent's observable scenario-contract.json from task acceptance criteria and numbered flow pseudocode, with atomic observation IDs and exclusive executable checks.
+description: Create or refine a Full parent's observable scenario-contract.json from task acceptance criteria and numbered flow pseudocode, with plain observable expectations and exclusive executable checks.
 ---
 
 # Scenario Design
@@ -12,10 +12,10 @@ Create the smallest executable behavior contract that covers the declared flow. 
 1. Resolve the direct Full task and `.agent-gate/scenario-gate.json`. If the active task is inherited, use its `parent_task`; the child never owns a scenario contract. Read only the Full task's `task.md` Contract/AC and `implementation.md` Pseudocode. Done when every exact source path is known.
 2. Use the `flow-design` skill if available to close missing branch and side-effect failure arms before extracting scenarios. Do not turn an unhandled arm into intended behavior. Done when every scenario points to an observable terminal.
 3. Build the smallest arm-covering scenario set. Each scenario has one event, 3-5 Given/When/Then steps total where practical, and asserts public output, persisted state, or emitted events rather than functions, mocks, or call order.
-4. Split every Then into atomic `{id, expectation}` observations. Use stable unique `O-*` IDs. Each scenario names one configured runner, and no runner name may be shared by another scenario.
+4. Write every Then as a short list of plain observable expectation strings. Each scenario names one configured runner, and no runner name may be shared by another scenario.
 5. Write the strict Full-parent `scenario-contract.json`. When a child discovers a missing behavior, update the parent contract before further implementation; never create `scenario-overlay.json`, ownership, or parent-candidate state.
-6. Run `python3 scripts/scenario_gate.py readiness <full-task-dir> --project-root <root>`. Fix schema, AC/P reference, duplicate observation, or exclusive-runner errors. Done when the command exits 0.
-7. After implementation, use the `artifact-judge` skill's Scenario Evidence Procedure. Scenario readiness authorizes implementation; only current evidence plus execution can authorize completion.
+6. Run `python3 scripts/scenario_gate.py readiness <full-task-dir> --project-root <root>`. Fix schema, AC/P reference, invalid Then expectation, or exclusive-runner errors. Done when the command exits 0.
+7. After implementation, run `python3 scripts/scenario_gate.py run <active-task-dir> --project-root <root>` and then `completion` with the same arguments. Fix the named failed or stale scenario and rerun. Done when every exclusive scenario check is current, trace completeness is 100%, and completion exits 0.
 
 ## Boundaries
 
@@ -24,6 +24,7 @@ Create the smallest executable behavior contract that covers the declared flow. 
 - Do not create child-local scenario artifacts or downgrade a Full completion boundary after decomposition.
 - Do not ask an LLM to judge runner commands. Repository runner configuration is the declared trust boundary.
 - Keep successful runner logs out of model context; inspect only failed execution evidence.
+- Treat scenario review as authoring assistance, not completion authority. A configured executable check and its fresh result own completion.
 
 ## Contract Shape
 
@@ -38,9 +39,7 @@ Create the smallest executable behavior contract that covers the declared flow. 
       "runner": "example-check",
       "given": ["an observable initial state"],
       "when": ["a public action occurs"],
-      "then": [
-        {"id": "O-EXAMPLE-RESULT", "expectation": "the public result is visible"}
-      ]
+      "then": ["the public result is visible"]
     }
   ]
 }
@@ -49,7 +48,8 @@ Create the smallest executable behavior contract that covers the declared flow. 
 ## Completion Criteria
 
 - Every Full-task AC is covered and every referenced P/AC exists.
-- Every scenario has observable outcomes with unique atomic observation IDs.
+- Every scenario has one or more plain observable Then expectations.
 - Every scenario names an exclusive configured runner.
 - No risk, level, ownership, parent-candidate, overlay, or runner-review metadata is introduced.
 - Scenario readiness exits 0 before protected implementation begins.
+- Current exclusive scenario checks pass and completion reports 100% trace completeness.

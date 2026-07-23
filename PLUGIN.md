@@ -80,8 +80,8 @@ parent and its P/AC scope. The same PostToolUse/PreToolUse hooks bind and
 revalidate it on Claude Code, Codex, and Antigravity; unit size never creates a
 Fast source-edit bypass. When the target repository opts in with
 `.agent-gate/scenario-gate.json`, every child keeps the direct Full parent's
-scenario contract, semantic evidence, and execution result as its completion
-boundary. The Stop hook requires 100% observable evidence coverage and every
+scenario contract and execution result as its completion boundary. The Stop
+hook requires 100% scenario trace completeness and every
 exclusive scenario check to pass. If a host cannot enforce Stop reliably, run
 `scripts/scenario_gate.py completion` as the CI merge gate.
 
@@ -103,8 +103,8 @@ when that host has the named skill installed.
   removes most inherited environment variables and never uses a shell, but it
   does not provide an OS-level network sandbox.
 - Every scenario requires an exclusive runner, so one process result is never
-  copied across scenario IDs. Independent evidence review maps observations to
-  implementation and verification source, and never judges runner commands.
+  copied across scenario IDs. Scenario review may assist authoring, but only
+  the fresh executable result participates in completion.
 - The repo's workspace configs (`.claude/settings.json`, `.codex/hooks.json`,
   `.agents/hooks.json`) are for dogfooding agent-gate on itself and are separate
   from these plugin manifests.

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Deterministic observable-scenario evidence and completion gate.
+"""Deterministic observable-scenario execution and completion gate.
 
-Semantic authoring and evidence judgment stay in skills. This module owns
-strict artifact validation, trusted command execution, freshness, transparent
-evidence coverage, and the Full-parent completion boundary.
+Scenario authoring stays in skills. This module owns strict contract validation,
+trusted command execution, freshness, trace completeness, and the Full-parent
+completion boundary.
 """
 
 from __future__ import annotations
@@ -25,20 +25,18 @@ from typing import Any
 from readiness_gate import AC_PATTERN, INHERITANCE_FILENAME, P_REF_PATTERN, validate_task_dir
 
 SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 CONFIG_RELATIVE = Path(".agent-gate/scenario-gate.json")
 CONTRACT_FILENAME = "scenario-contract.json"
-EVIDENCE_FILENAME = "scenario-evidence.json"
 RESULT_FILENAME = "scenario-result.json"
 OBSOLETE_CHILD_FILENAMES = (
     "scenario-overlay.json",
     CONTRACT_FILENAME,
-    EVIDENCE_FILENAME,
     RESULT_FILENAME,
 )
 
 SAFE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_-]*")
 SCENARIO_ID = re.compile(r"S-[A-Z0-9][A-Z0-9-]*")
-OBSERVATION_ID = re.compile(r"O-[A-Z0-9][A-Z0-9-]*")
 
 CONFIG_FIELDS = frozenset({"schema_version", "runners"})
 RUNNER_FIELDS = frozenset({"command", "timeout_seconds", "max_output_bytes"})
@@ -47,24 +45,11 @@ SCENARIO_FIELDS = frozenset(
     {"id", "title", "covers", "runner", "given", "when", "then"}
 )
 COVERS_FIELDS = frozenset({"acceptance", "flow"})
-OBSERVATION_FIELDS = frozenset({"id", "expectation"})
-EVIDENCE_FIELDS = frozenset(
+RESULT_FIELDS = frozenset(
     {
         "schema_version",
         "task_sha256",
         "flow_sha256",
-        "contract_sha256",
-        "source_fingerprint",
-        "observations",
-        "verdict",
-        "blocking_findings",
-    }
-)
-EVIDENCE_ITEM_FIELDS = frozenset({"id", "implementation", "verification"})
-LOCATION_FIELDS = frozenset({"path", "line"})
-RESULT_FIELDS = frozenset(
-    {
-        "schema_version",
         "contract_sha256",
         "runner_config_sha256",
         "source_fingerprint",
@@ -95,12 +80,9 @@ SAFE_ENVIRONMENT = frozenset(
 
 
 @dataclass(frozen=True)
-class ScenarioCoverage:
+class ScenarioTraceCompleteness:
     required: int
-    implementation_mapped: int
-    verification_mapped: int
-    execution_passed: int
-    verified: int
+    passed: int
     percentage: float
 
 
@@ -110,7 +92,7 @@ class ScenarioGateResult:
     allowed: bool
     errors: tuple[str, ...]
     required_scenarios: tuple[str, ...]
-    coverage: ScenarioCoverage | None = None
+    trace_completeness: ScenarioTraceCompleteness | None = None
 
 
 @dataclass(frozen=True)
@@ -137,7 +119,8 @@ class ScenarioRunResult:
 class _ResolvedScenarioSet:
     requested_task: Path
     owner_task: Path
-    flow_path: Path
+    task_content: bytes
+    flow_content: bytes
     contract_content: bytes
     scenarios: tuple[dict[str, Any], ...]
 
@@ -316,34 +299,7 @@ def _validate_scenario(
     _string_list(scenario.get("given"), f"{label}.given", errors)
     _string_list(scenario.get("when"), f"{label}.when", errors)
 
-    raw_observations = scenario.get("then")
-    if not isinstance(raw_observations, list) or not raw_observations:
-        errors.append(f"{label}.then must be a non-empty list")
-        return scenario
-    observation_ids: list[str] = []
-    for observation_index, raw_observation in enumerate(raw_observations):
-        observation_label = f"{label}.then[{observation_index}]"
-        observation = _object(raw_observation, observation_label, errors)
-        _fields(
-            observation,
-            OBSERVATION_FIELDS,
-            OBSERVATION_FIELDS,
-            observation_label,
-            errors,
-        )
-        observation_id = observation.get("id")
-        if (
-            not isinstance(observation_id, str)
-            or OBSERVATION_ID.fullmatch(observation_id) is None
-        ):
-            errors.append(f"{observation_label}.id must match {OBSERVATION_ID.pattern}")
-        else:
-            observation_ids.append(observation_id)
-        expectation = observation.get("expectation")
-        if not isinstance(expectation, str) or not expectation.strip():
-            errors.append(f"{observation_label}.expectation must be a non-empty string")
-    if len(observation_ids) != len(set(observation_ids)):
-        errors.append(f"{label}.then contains duplicate observation ids")
+    _string_list(scenario.get("then"), f"{label}.then", errors)
     return scenario
 
 
@@ -376,18 +332,6 @@ def _parent_contract(
     )
     if duplicate_scenarios:
         errors.append("duplicate scenario id: " + ", ".join(duplicate_scenarios))
-
-    observation_ids = [
-        observation.get("id")
-        for scenario in scenarios
-        for observation in scenario.get("then", [])
-        if isinstance(observation, dict) and isinstance(observation.get("id"), str)
-    ]
-    duplicate_observations = sorted(
-        {item for item in observation_ids if observation_ids.count(item) > 1}
-    )
-    if duplicate_observations:
-        errors.append("duplicate observation id: " + ", ".join(duplicate_observations))
 
     runner_to_scenarios: dict[str, list[str]] = {}
     for scenario in scenarios:
@@ -509,10 +453,18 @@ def _resolve_scenario_set(
         if not owner_readiness.ready:
             errors.extend(f"parent task readiness: {error}" for error in owner_readiness.errors)
     scenarios, contract_content = _parent_contract(owner, policy, errors)
+    try:
+        task_content = (owner / "task.md").read_bytes()
+        flow_content = (owner / "implementation.md").read_bytes()
+    except OSError as exc:
+        errors.append(f"cannot snapshot parent flow artifacts: {exc}")
+        task_content = b""
+        flow_content = b""
     return _ResolvedScenarioSet(
         requested_task=task,
         owner_task=owner,
-        flow_path=owner / "implementation.md",
+        task_content=task_content,
+        flow_content=flow_content,
         contract_content=contract_content,
         scenarios=scenarios,
     )
@@ -537,19 +489,6 @@ def validate_readiness(
             if isinstance(scenario.get("id"), str)
         )
     return ScenarioGateResult(True, not errors, tuple(errors), required)
-
-
-def _ordered_observations(
-    scenarios: tuple[dict[str, Any], ...]
-) -> tuple[tuple[str, str], ...]:
-    return tuple(
-        (observation["id"], scenario["id"])
-        for scenario in scenarios
-        if isinstance(scenario.get("id"), str)
-        for observation in scenario.get("then", [])
-        if isinstance(observation, dict) and isinstance(observation.get("id"), str)
-    )
-
 
 def _git_output(root: Path, arguments: tuple[str, ...]) -> tuple[bytes | None, str | None]:
     max_bytes = 52_428_800
@@ -635,175 +574,6 @@ def _source_fingerprint(root: Path) -> tuple[str | None, tuple[str, ...]]:
     if errors:
         return None, tuple(errors)
     return digest.hexdigest(), ()
-
-
-def evidence_template(task_dir: Path | str, project_root: Path | str) -> dict[str, Any]:
-    root = Path(project_root).resolve(strict=True)
-    policy, policy_errors = load_policy(root)
-    if policy is None:
-        raise ValueError("; ".join(policy_errors) or "scenario gate is disabled")
-    errors: list[str] = []
-    resolved = _resolve_scenario_set(root, Path(task_dir), policy, errors)
-    if resolved is None:
-        raise ValueError("; ".join(errors))
-    if resolved.owner_task != resolved.requested_task:
-        raise ValueError(
-            f"write scenario evidence on Full parent task {resolved.owner_task.name}"
-        )
-    fingerprint, fingerprint_errors = _source_fingerprint(root)
-    errors.extend(fingerprint_errors)
-    try:
-        task_sha256 = _sha256((resolved.owner_task / "task.md").read_bytes())
-        flow_sha256 = _sha256(resolved.flow_path.read_bytes())
-    except OSError as exc:
-        errors.append(f"cannot create scenario evidence template: {exc}")
-    if errors or fingerprint is None:
-        raise ValueError("; ".join(errors))
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "task_sha256": task_sha256,
-        "flow_sha256": flow_sha256,
-        "contract_sha256": _sha256(resolved.contract_content),
-        "source_fingerprint": fingerprint,
-        "observations": [
-            {"id": observation_id, "implementation": [], "verification": []}
-            for observation_id, _ in _ordered_observations(resolved.scenarios)
-        ],
-        "verdict": "revise",
-        "blocking_findings": ["independent scenario evidence review has not run"],
-    }
-
-
-def _validate_locations(
-    raw: Any,
-    label: str,
-    root: Path,
-    errors: list[str],
-) -> bool:
-    if not isinstance(raw, list) or not raw:
-        errors.append(f"{label} must be a non-empty list")
-        return False
-    valid = True
-    for index, raw_location in enumerate(raw):
-        location_label = f"{label}[{index}]"
-        location = _object(raw_location, location_label, errors)
-        if not _fields(location, LOCATION_FIELDS, LOCATION_FIELDS, location_label, errors):
-            valid = False
-        raw_path = location.get("path")
-        if (
-            not isinstance(raw_path, str)
-            or not raw_path
-            or raw_path != raw_path.strip()
-            or Path(raw_path).is_absolute()
-            or ".." in Path(raw_path).parts
-            or Path(raw_path).parts[:1] in ((".git",), ("_workspace",))
-        ):
-            errors.append(f"{location_label}.path must be a safe project-relative source path")
-            valid = False
-            continue
-        path = root / raw_path
-        try:
-            resolved = path.resolve(strict=True)
-            resolved.relative_to(root)
-            if path.is_symlink() or not resolved.is_file():
-                raise OSError("not a regular non-symlink file")
-            lines = resolved.read_text(encoding="utf-8").splitlines()
-        except (OSError, RuntimeError, UnicodeError, ValueError) as exc:
-            errors.append(f"{location_label}.path is invalid: {exc}")
-            valid = False
-            continue
-        line = location.get("line")
-        if isinstance(line, bool) or not isinstance(line, int) or not 1 <= line <= len(lines):
-            errors.append(f"{location_label}.line must identify an existing source line")
-            valid = False
-    return valid
-
-
-def _validate_evidence(
-    resolved: _ResolvedScenarioSet,
-    root: Path,
-    fingerprint: str | None,
-    errors: list[str],
-) -> tuple[set[str], set[str], bool]:
-    local_errors: list[str] = []
-    loaded = _load_json(
-        resolved.owner_task / EVIDENCE_FILENAME, EVIDENCE_FILENAME, local_errors
-    )
-    if loaded is None:
-        errors.extend(local_errors)
-        return set(), set(), False
-    evidence, _ = loaded
-    schema_valid = _fields(
-        evidence, EVIDENCE_FIELDS, EVIDENCE_FIELDS, "scenario evidence", local_errors
-    )
-    if evidence.get("schema_version") != SCHEMA_VERSION:
-        local_errors.append(f"scenario evidence schema_version must be {SCHEMA_VERSION}")
-        schema_valid = False
-    for field, path in (
-        ("task_sha256", resolved.owner_task / "task.md"),
-        ("flow_sha256", resolved.flow_path),
-    ):
-        try:
-            actual = _sha256(path.read_bytes())
-        except OSError as exc:
-            local_errors.append(f"cannot read {path.name} for scenario evidence: {exc}")
-            schema_valid = False
-            continue
-        if evidence.get(field) != actual:
-            local_errors.append(f"scenario evidence {field} is stale")
-            schema_valid = False
-    if evidence.get("contract_sha256") != _sha256(resolved.contract_content):
-        local_errors.append("scenario evidence contract_sha256 is stale")
-        schema_valid = False
-    if fingerprint is None or evidence.get("source_fingerprint") != fingerprint:
-        local_errors.append("scenario evidence source_fingerprint is stale")
-        schema_valid = False
-
-    expected_ids = tuple(item[0] for item in _ordered_observations(resolved.scenarios))
-    raw_items = evidence.get("observations")
-    if not isinstance(raw_items, list):
-        local_errors.append("scenario evidence observations must be a list")
-        raw_items = []
-        schema_valid = False
-    implementation_mapped: set[str] = set()
-    verification_mapped: set[str] = set()
-    observed_ids: list[str] = []
-    for index, raw_item in enumerate(raw_items):
-        label = f"scenario evidence observations[{index}]"
-        item = _object(raw_item, label, local_errors)
-        if not _fields(item, EVIDENCE_ITEM_FIELDS, EVIDENCE_ITEM_FIELDS, label, local_errors):
-            schema_valid = False
-        observation_id = item.get("id")
-        if not isinstance(observation_id, str) or OBSERVATION_ID.fullmatch(observation_id) is None:
-            local_errors.append(f"{label}.id is invalid")
-            schema_valid = False
-            continue
-        observed_ids.append(observation_id)
-        if _validate_locations(item.get("implementation"), f"{label}.implementation", root, local_errors):
-            implementation_mapped.add(observation_id)
-        if _validate_locations(item.get("verification"), f"{label}.verification", root, local_errors):
-            verification_mapped.add(observation_id)
-    if tuple(observed_ids) != expected_ids:
-        local_errors.append("scenario evidence observation ids must exactly match the contract")
-        schema_valid = False
-    if len(observed_ids) != len(set(observed_ids)):
-        local_errors.append("scenario evidence contains duplicate observation ids")
-        schema_valid = False
-
-    semantic_approved = schema_valid
-    if evidence.get("verdict") != "pass":
-        local_errors.append("scenario evidence verdict must be 'pass'")
-        semantic_approved = False
-    findings = evidence.get("blocking_findings")
-    if not isinstance(findings, list):
-        local_errors.append("scenario evidence blocking_findings must be a list")
-        semantic_approved = False
-    elif findings:
-        local_errors.append("scenario evidence blocking_findings must be empty")
-        semantic_approved = False
-    errors.extend(local_errors)
-    return implementation_mapped, verification_mapped, semantic_approved
-
 
 def _kill_runner(process: subprocess.Popen[Any]) -> None:
     if os.name == "posix":
@@ -929,7 +699,9 @@ def run_scenarios(
     if fingerprint is None:
         return ScenarioRunResult(False, tuple(execution_errors) + fingerprint_errors, None)
     result_value = {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": RESULT_SCHEMA_VERSION,
+        "task_sha256": _sha256(resolved.task_content),
+        "flow_sha256": _sha256(resolved.flow_content),
         "contract_sha256": _sha256(resolved.contract_content),
         "runner_config_sha256": policy.sha256,
         "source_fingerprint": fingerprint,
@@ -1005,8 +777,14 @@ def _validate_result(
         return set(), False
     result, _ = loaded
     current = _fields(result, RESULT_FIELDS, RESULT_FIELDS, "scenario result", errors)
-    if result.get("schema_version") != SCHEMA_VERSION:
-        errors.append(f"scenario result schema_version must be {SCHEMA_VERSION}")
+    if result.get("schema_version") != RESULT_SCHEMA_VERSION:
+        errors.append(f"scenario result schema_version must be {RESULT_SCHEMA_VERSION}")
+        current = False
+    if result.get("task_sha256") != _sha256(resolved.task_content):
+        errors.append("scenario result task_sha256 is stale")
+        current = False
+    if result.get("flow_sha256") != _sha256(resolved.flow_content):
+        errors.append("scenario result flow_sha256 is stale")
         current = False
     if result.get("contract_sha256") != _sha256(resolved.contract_content):
         errors.append("scenario result contract_sha256 is stale")
@@ -1053,50 +831,34 @@ def validate_completion(
     )
     fingerprint, fingerprint_errors = _source_fingerprint(root.resolve(strict=True))
     errors.extend(fingerprint_errors)
-    implementation_ids, verification_ids, evidence_approved = _validate_evidence(
-        resolved, root.resolve(strict=True), fingerprint, errors
-    )
     passed_scenarios, result_current = _validate_result(
         resolved, policy, fingerprint, errors
     )
+    completed_scenarios = passed_scenarios if result_current else set()
+    if result_current:
+        for scenario_id in required_scenarios:
+            if scenario_id not in passed_scenarios:
+                errors.append(f"required scenario did not pass: {scenario_id}")
 
-    observations = _ordered_observations(resolved.scenarios)
-    required_ids = {observation_id for observation_id, _ in observations}
-    execution_ids = {
-        observation_id
-        for observation_id, scenario_id in observations
-        if result_current and scenario_id in passed_scenarios
-    }
-    verified_ids = set()
-    if evidence_approved and result_current:
-        verified_ids = required_ids & implementation_ids & verification_ids & execution_ids
-
-    for observation_id in sorted(required_ids - implementation_ids):
-        errors.append(f"implementation evidence is missing: {observation_id}")
-    for observation_id in sorted(required_ids - verification_ids):
-        errors.append(f"verification evidence is missing: {observation_id}")
-    for scenario_id in required_scenarios:
-        if scenario_id not in passed_scenarios:
-            errors.append(f"required scenario did not pass: {scenario_id}")
-
-    required_count = len(required_ids)
-    percentage = round((len(verified_ids) / required_count) * 100, 2) if required_count else 0.0
-    coverage = ScenarioCoverage(
+    required_count = len(required_scenarios)
+    percentage = (
+        round((len(completed_scenarios) / required_count) * 100, 2)
+        if required_count
+        else 0.0
+    )
+    trace_completeness = ScenarioTraceCompleteness(
         required=required_count,
-        implementation_mapped=len(required_ids & implementation_ids),
-        verification_mapped=len(required_ids & verification_ids),
-        execution_passed=len(required_ids & execution_ids),
-        verified=len(verified_ids),
+        passed=len(completed_scenarios),
         percentage=percentage,
     )
     if percentage != 100.0:
-        errors.append(f"scenario evidence coverage must be 100%, got {percentage:.2f}%")
+        errors.append(f"scenario trace completeness must be 100%, got {percentage:.2f}%")
     return ScenarioGateResult(
         True,
         not errors,
         tuple(dict.fromkeys(errors)),
         required_scenarios,
-        coverage,
+        trace_completeness,
     )
 
 
@@ -1106,7 +868,11 @@ def _gate_json(result: ScenarioGateResult) -> dict[str, Any]:
         "allowed": result.allowed,
         "errors": list(result.errors),
         "required_scenarios": list(result.required_scenarios),
-        "coverage": asdict(result.coverage) if result.coverage is not None else None,
+        "trace_completeness": (
+            asdict(result.trace_completeness)
+            if result.trace_completeness is not None
+            else None
+        ),
     }
 
 
@@ -1115,8 +881,8 @@ def _print_gate(result: ScenarioGateResult, as_json: bool) -> None:
         print(json.dumps(_gate_json(result), ensure_ascii=False, sort_keys=True))
         return
     print("PASS" if result.allowed else "BLOCK")
-    if result.coverage is not None:
-        print(f"  scenario evidence coverage: {result.coverage.percentage:.2f}%")
+    if result.trace_completeness is not None:
+        print(f"  scenario trace completeness: {result.trace_completeness.percentage:.2f}%")
     for error in result.errors:
         print(f"  error: {error}")
 
@@ -1124,21 +890,13 @@ def _print_gate(result: ScenarioGateResult, as_json: bool) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
-    for name in ("readiness", "evidence-template", "run", "completion"):
+    for name in ("readiness", "run", "completion"):
         command = subparsers.add_parser(name)
         command.add_argument("task_dir", type=Path)
         command.add_argument("--project-root", required=True, type=Path)
         command.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    if args.operation == "evidence-template":
-        try:
-            template = evidence_template(args.task_dir, args.project_root)
-        except ValueError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            return 1
-        print(json.dumps(template, ensure_ascii=False, indent=2))
-        return 0
     if args.operation == "readiness":
         result = validate_readiness(args.task_dir, args.project_root)
         _print_gate(result, args.json)

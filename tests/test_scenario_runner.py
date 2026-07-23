@@ -14,7 +14,6 @@ from scenario_helpers import (
     parent_contract,
     write_parent_project,
     write_parent_scenarios,
-    write_passing_evidence,
     write_policy,
 )
 
@@ -149,7 +148,6 @@ class ScenarioResultFreshnessTest(unittest.TestCase):
         self.temp.cleanup()
 
     def run_and_assert_fresh(self) -> None:
-        write_passing_evidence(self.task_dir, self.project)
         run = run_scenarios(self.task_dir, self.project)
         self.assertTrue(run.result_written, run.errors)
         completion = validate_completion(self.task_dir, self.project)
@@ -183,7 +181,7 @@ class ScenarioResultFreshnessTest(unittest.TestCase):
             completion.errors,
         )
 
-    def test_result_and_evidence_become_stale_after_source_change(self):
+    def test_result_becomes_stale_after_source_change(self):
         self.run_and_assert_fresh()
         (self.project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
         self.assert_stale("source_fingerprint is stale")

@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
 from pathlib import Path
 
 from readiness_helpers import CHILD_TASK, inheritance_for, write_ready_artifacts
-
-
-def digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
 
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -26,9 +20,7 @@ def scenario(
     acceptance: list[str],
     flow: list[str],
     runner: str,
-    observation_id: str | None = None,
 ) -> dict:
-    observation_id = observation_id or f"O-{scenario_id.removeprefix('S-')}"
     return {
         "id": scenario_id,
         "title": f"Observable behavior for {scenario_id}",
@@ -36,12 +28,7 @@ def scenario(
         "runner": runner,
         "given": ["a controlled project state"],
         "when": ["the public operation runs"],
-        "then": [
-            {
-                "id": observation_id,
-                "expectation": "an observable result is returned",
-            }
-        ],
+        "then": ["an observable result is returned"],
     }
 
 
@@ -128,19 +115,3 @@ def init_git_project(project: Path) -> None:
     )
     for command in commands:
         subprocess.run(command, cwd=project, check=True, capture_output=True, text=True)
-
-
-def write_passing_evidence(task_dir: Path, project: Path) -> Path:
-    scripts = Path(__file__).resolve().parent.parent / "scripts"
-    sys.path.insert(0, str(scripts))
-    from scenario_gate import evidence_template
-
-    value = evidence_template(task_dir, project)
-    for item in value["observations"]:
-        item["implementation"] = [{"path": "src/app.txt", "line": 1}]
-        item["verification"] = [{"path": "tests/scenario.txt", "line": 1}]
-    value["verdict"] = "pass"
-    value["blocking_findings"] = []
-    path = task_dir / "scenario-evidence.json"
-    write_json(path, value)
-    return path

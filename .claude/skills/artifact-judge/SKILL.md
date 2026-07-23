@@ -1,6 +1,6 @@
 ---
 name: artifact-judge
-description: Score an agent artifact's semantic quality with an independent LLM judge, certify task.md plus implementation.md, map observable scenario evidence after implementation, or bind a decomposed child to a ready Full parent. Use for artifact evaluation, readiness assessment, scenario-evidence.json generation, and inherited child readiness. Not for general code review.
+description: Score an agent artifact's semantic quality with an independent LLM judge, certify task.md plus implementation.md, or bind a decomposed child to a ready Full parent. Use for artifact evaluation, readiness assessment, and inherited child readiness. Not for general code review or executable scenario completion.
 ---
 
 # Artifact Judge
@@ -10,19 +10,9 @@ for one LLM judgment only when the artifact passes it. The judge must be an
 independent context — never the session that wrote the artifact.
 
 Route Full `task.md` + `implementation.md` readiness and inherited child
-readiness to `docs/readiness-assessment.md`. Route scenario-to-code evidence
-assessment to `docs/scenario-assessment.md`. Route every other artifact to
-`docs/rubric-judge.md`. Read only the selected reference.
-
-## Scenario Evidence Procedure
-
-1. **Resolve the Full owner.** Identify the direct Full task's `scenario-contract.json`, task Contract/AC, Pseudocode, project root, and changed implementation/verification source. If work was decomposed, follow `inherited-readiness.json` to the direct Full parent; the child owns no scenario artifact. Done when: every exact path is known.
-2. **Run deterministic preflight.** Run `scripts/scenario_gate.py readiness <full-task-dir> --project-root <root>`, then `scripts/scenario_gate.py evidence-template <full-task-dir> --project-root <root>`. Stop on schema, reference, exclusive-runner, path, Git, or hash errors. Done when: one current JSON template is captured.
-3. **Judge independently.** Launch a fresh context with only the task/flow sections, scenario contract, changed implementation and verification source, template, and prompt from `docs/scenario-assessment.md`. Require JSON only; never include runner configuration, runner commands, authoring conversation, or successful runner logs. Done when: a JSON reply is captured.
-4. **Write the bound evidence.** Write unchanged hashes and observation IDs plus concrete implementation/verification locations and the independent verdict to the Full parent's `scenario-evidence.json`. Never change expectations or cite irrelevant lines merely to obtain 100%. Done when: the file exists.
-5. **Execute and validate.** Run `scripts/scenario_gate.py run <active-task-dir> --project-root <root>` and `scripts/scenario_gate.py completion <active-task-dir> --project-root <root>`. On evidence failure, fix the named semantic or structural gap and restart at template generation. Done when: completion reports 100% and exits 0.
-
-Stop after this procedure for scenario evidence. Execution success belongs to the configured repository runner and deterministic completion gate, not the judge.
+readiness to `docs/readiness-assessment.md`. Route every other artifact to
+`docs/rubric-judge.md`. Read only the selected reference. Executable scenario
+completion belongs to `scenario-design` and the deterministic scenario gate.
 
 ## Inherited Child Procedure
 

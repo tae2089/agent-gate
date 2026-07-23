@@ -10,7 +10,6 @@ from pathlib import Path
 from scenario_helpers import (
     init_git_project,
     write_parent_project,
-    write_passing_evidence,
     write_policy,
 )
 
@@ -38,7 +37,6 @@ class SinglePolicyTest(unittest.TestCase):
             project = Path(directory)
             task = write_parent_project(project)
             init_git_project(project)
-            write_passing_evidence(task, project)
             policy_path = project / ".agent-gate" / "scenario-gate.json"
             policy = json.loads(policy_path.read_text(encoding="utf-8"))
             policy["runners"]["stale-check"]["command"] = [
@@ -47,8 +45,6 @@ class SinglePolicyTest(unittest.TestCase):
                 "raise SystemExit(7)",
             ]
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
-            # Runner configuration changed after evidence creation, which is allowed:
-            # evidence judges code mapping, while results bind the runner config.
             run = run_scenarios(task, project)
             self.assertTrue(run.result_written, run.errors)
 
@@ -56,8 +52,8 @@ class SinglePolicyTest(unittest.TestCase):
 
             self.assertFalse(result.allowed)
             self.assertTrue(any("S-BLOCK-STALE" in error for error in result.errors))
-            assert result.coverage is not None
-            self.assertEqual(result.coverage.execution_passed, 1)
+            assert result.trace_completeness is not None
+            self.assertEqual(result.trace_completeness.passed, 1)
 
 
 if __name__ == "__main__":
