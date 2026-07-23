@@ -16,14 +16,22 @@ validation. Default manifests wire only Design Gate. The verifier, watermark,
 and handoff reinjection remain bundled lifecycle support but require explicit
 opt-in; they do not participate in either gate's verdict.
 
-The optional `evolution-loop` skill adds one evidence-driven self-evolution
-workflow for this repository. The selected host independently runs
+The optional `evolution-loop` skill adds one evidence-driven workflow for the
+current target repository. The selected host independently runs
 `Interview → Seed → Execute → Evaluate`; shared JSON artifacts and the existing
 Design/Completion gates own lifecycle transitions. An explicit user request is
 the sole trigger for features, bugs, contract violations, and technical debt.
 The host may use request-scoped GitHub/Jira MCP tools or skills, CI, repository
 inspection, and code analysis only to enrich that request with untrusted
 evidence; none of those sources can originate or select work.
+
+The host resolves `AGENT_GATE_ROOT` from the absolute path of the loaded skill
+and `PROJECT_ROOT` from the current target Git worktree. Bundled scripts run
+from `AGENT_GATE_ROOT`; workspace artifacts, source, tests, and Git changes stay
+inside `PROJECT_ROOT`. The host stops `blocked` if either root is unavailable
+and never copies the runtime into the target repository. Seed and Execute use
+only request-relevant repository-native direct argv checks supported by target
+instructions, tests, or CI.
 
 At `pr-ready`, the host uses an available GitHub MCP tool or skill to push and
 verify one ready-for-review PR, then calls the provider-neutral `record-pr`
