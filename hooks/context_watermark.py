@@ -38,8 +38,8 @@ from artifact_lint import lint_file  # noqa: E402
 LABEL = "context-watermark"
 DEFAULT_WINDOW = 200_000
 # Long-context recall degrades well before the window fills (Chroma "Context
-# Rot", 2025), so evacuate at 0.8 rather than waiting for a near-full window.
-DEFAULT_THRESHOLD = 0.8
+# Rot", 2025), so evacuate at 0.85 rather than waiting for a near-full window.
+DEFAULT_THRESHOLD = 0.85
 
 
 def _current_turn(entries: list[dict]) -> list[dict]:
