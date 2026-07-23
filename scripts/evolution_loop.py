@@ -42,7 +42,7 @@ SOURCES = frozenset(
     {"manual", "github", "jira", "ci", "repository", "code-analysis"}
 )
 FEATURE_SOURCES = frozenset({"manual", "github", "jira"})
-STATE_FIELDS = frozenset(
+STATE_REQUIRED_FIELDS = frozenset(
     {
         "schema_version",
         "status",
@@ -52,6 +52,7 @@ STATE_FIELDS = frozenset(
         "pr_url",
     }
 )
+STATE_FIELDS = STATE_REQUIRED_FIELDS | {"github_repository"}
 PHASE_TRANSITIONS = {
     "interview": frozenset({"seed"}),
     "seed": frozenset({"execute"}),
@@ -115,6 +116,7 @@ class RunResult:
 class DiscoveryResult:
     records: tuple[Mapping[str, Any], ...]
     errors: tuple[str, ...]
+    github_repository: Optional[str]
 
 
 def _non_empty_string(
@@ -234,7 +236,7 @@ def _load_state(task_dir: Path) -> RunResult:
     if not isinstance(value, dict):
         return RunResult(False, ("evolution state must be an object",), {})
     unknown = sorted(value.keys() - STATE_FIELDS)
-    missing = sorted(STATE_FIELDS - value.keys())
+    missing = sorted(STATE_REQUIRED_FIELDS - value.keys())
     errors = []
     if unknown:
         errors.append(f"evolution state has unknown fields: {', '.join(unknown)}")
@@ -280,6 +282,14 @@ def _load_state(task_dir: Path) -> RunResult:
             errors.append("pr-opened evolution state requires pr_url")
     elif pr_url is not None:
         errors.append("only pr-opened evolution state may contain pr_url")
+    github_repository = value.get("github_repository")
+    if (
+        "github_repository" in value
+        and not _valid_github_repository(github_repository)
+    ):
+        errors.append(
+            "evolution state github_repository must use owner/repo format"
+        )
     if errors:
         return RunResult(False, tuple(errors), value)
     return RunResult(True, (), value)
@@ -311,6 +321,7 @@ def start_run(
     candidate: Any,
     max_iterations: int = 3,
     approved_records: Sequence[Mapping[str, Any]] = (),
+    github_repository: Optional[str] = None,
 ) -> RunResult:
     validation = validate_candidate(candidate)
     if not validation.allowed:
@@ -349,6 +360,15 @@ def start_run(
         return RunResult(
             False, ("max_iterations must be an integer from 1 through 10",), {}
         )
+    if (
+        github_repository is not None
+        and not _valid_github_repository(github_repository)
+    ):
+        return RunResult(
+            False,
+            ("GitHub repository must use owner/repo format",),
+            {},
+        )
     task = Path(task_dir)
     if not task.is_dir() or task.is_symlink():
         return RunResult(False, ("task directory must be a real directory",), {})
@@ -378,6 +398,8 @@ def start_run(
         "candidate_sha256": hashlib.sha256(candidate_content).hexdigest(),
         "pr_url": None,
     }
+    if github_repository is not None:
+        state["github_repository"] = github_repository
     try:
         _atomic_write(task / "candidate.json", candidate_content)
         _write_state(task, state)
@@ -470,8 +492,76 @@ def _run_discovery_command(
     return value
 
 
+def _valid_github_repository(value: Any) -> bool:
+    if not isinstance(value, str) or value != value.strip():
+        return False
+    parts = value.split("/")
+    return (
+        len(parts) == 2
+        and all(parts)
+        and not any(character.isspace() for character in value)
+        and not any(part.startswith("-") for part in parts)
+    )
+
+
+def resolve_github_repository(
+    project_root: Path,
+    requested_repository: Optional[str] = None,
+    command_runner: Any = subprocess.run,
+) -> tuple[Optional[str], tuple[str, ...]]:
+    if (
+        requested_repository is not None
+        and not _valid_github_repository(requested_repository)
+    ):
+        return None, ("GitHub repository must use owner/repo format",)
+
+    root = Path(project_root).resolve(strict=True)
+    authentication, errors = _command_receipt(
+        ["gh", "auth", "status"],
+        root,
+        command_runner,
+        "GitHub authentication",
+    )
+    if errors:
+        return None, errors
+    assert authentication is not None
+
+    resolved, errors = _command_receipt(
+        ["gh", "repo", "view", "--json", "nameWithOwner"],
+        root,
+        command_runner,
+        "GitHub repository resolution",
+    )
+    if errors:
+        return None, errors
+    assert resolved is not None
+    try:
+        payload = json.loads(resolved.stdout)
+    except json.JSONDecodeError:
+        return None, ("GitHub repository resolution returned invalid JSON",)
+    if (
+        not isinstance(payload, dict)
+        or not _valid_github_repository(payload.get("nameWithOwner"))
+    ):
+        return None, (
+            "GitHub repository resolution returned an invalid JSON object",
+        )
+    repository = payload["nameWithOwner"]
+    if (
+        requested_repository is not None
+        and requested_repository.casefold() != repository.casefold()
+    ):
+        return None, (
+            "requested GitHub repository does not match the project repository",
+        )
+    return repository, ()
+
+
 def _github_records(
-    project_root: Path, command_runner: Any, errors: list[str]
+    project_root: Path,
+    github_repository: str,
+    command_runner: Any,
+    errors: list[str],
 ) -> list[Mapping[str, Any]]:
     records: list[Mapping[str, Any]] = []
     issues = _run_discovery_command(
@@ -479,6 +569,8 @@ def _github_records(
             "gh",
             "issue",
             "list",
+            "--repo",
+            github_repository,
             "--state",
             "open",
             "--label",
@@ -530,6 +622,8 @@ def _github_records(
             "gh",
             "run",
             "list",
+            "--repo",
+            github_repository,
             "--status",
             "failure",
             "--limit",
@@ -700,16 +794,35 @@ def _jira_records(
 
 def discover_evidence(
     project_root: Path,
+    github_repository: Optional[str] = None,
     environment: Optional[Mapping[str, str]] = None,
     command_runner: Any = subprocess.run,
     jira_opener: Any = urlopen,
 ) -> DiscoveryResult:
     root = Path(project_root).resolve(strict=True)
     source_environment = os.environ if environment is None else environment
-    errors: list[str] = []
-    records = _github_records(root, command_runner, errors)
+    resolved_repository, preflight_errors = resolve_github_repository(
+        root,
+        requested_repository=github_repository,
+        command_runner=command_runner,
+    )
+    errors = list(preflight_errors)
+    records: list[Mapping[str, Any]] = []
+    if resolved_repository is not None:
+        records.extend(
+            _github_records(
+                root,
+                resolved_repository,
+                command_runner,
+                errors,
+            )
+        )
     records.extend(_jira_records(source_environment, jira_opener, errors))
-    return DiscoveryResult(tuple(records), tuple(dict.fromkeys(errors)))
+    return DiscoveryResult(
+        tuple(records),
+        tuple(dict.fromkeys(errors)),
+        resolved_repository,
+    )
 
 
 def _validate_evaluation(
@@ -1030,11 +1143,25 @@ def publish_run(
         return RunResult(False, errors, loaded.state)
     assert title is not None and body_path is not None
 
+    github_repository, errors = resolve_github_repository(
+        root,
+        requested_repository=loaded.state.get("github_repository"),
+        command_runner=command_runner,
+    )
+    if errors:
+        blocked = _publication_state(
+            task, loaded.state, "publish-blocked"
+        )
+        return RunResult(False, errors, blocked.state)
+    assert github_repository is not None
+
     existing, errors = _command_receipt(
         [
             "gh",
             "pr",
             "list",
+            "--repo",
+            github_repository,
             "--state",
             "all",
             "--head",
@@ -1097,6 +1224,8 @@ def publish_run(
             "gh",
             "pr",
             "create",
+            "--repo",
+            github_repository,
             "--base",
             base_branch,
             "--head",
@@ -1190,12 +1319,14 @@ def main() -> int:
 
     discover = subparsers.add_parser("discover")
     discover.add_argument("--project-root", required=True, type=Path)
+    discover.add_argument("--github-repo")
     discover.add_argument("--json", action="store_true")
 
     start = subparsers.add_parser("start")
     start.add_argument("task", type=Path)
     start.add_argument("--candidate", required=True, type=Path)
     start.add_argument("--project-root", required=True, type=Path)
+    start.add_argument("--github-repo")
     start.add_argument("--max-iterations", type=int, default=3)
     start.add_argument("--json", action="store_true")
 
@@ -1233,18 +1364,22 @@ def main() -> int:
     args = parser.parse_args()
     if args.operation == "discover":
         try:
-            result = discover_evidence(args.project_root)
+            result = discover_evidence(
+                args.project_root,
+                github_repository=args.github_repo,
+            )
         except OSError as exc:
             payload = {"allowed": False, "errors": [f"cannot discover evidence: {exc}"], "records": []}
             _print_payload(payload, args.json)
             return 1
         payload = {
-            "allowed": True,
+            "allowed": result.github_repository is not None,
             "errors": list(result.errors),
             "records": [dict(record) for record in result.records],
+            "github_repository": result.github_repository,
         }
         _print_payload(payload, args.json)
-        return 0
+        return 0 if result.github_repository is not None else 1
 
     if args.operation == "status" and args.task is None:
         task, errors = _active_evolution_task(args.project_root)
@@ -1269,18 +1404,32 @@ def main() -> int:
         else:
             validation = validate_candidate(candidate_value)
             approved_records: Sequence[Mapping[str, Any]] = ()
-            if (
-                validation.allowed
-                and validation.candidate.get("kind") == "feature"
-                and validation.candidate.get("source") in {"github", "jira"}
-            ):
-                approved_records = discover_evidence(args.project_root).records
-            result = start_run(
-                task,
-                candidate_value,
-                args.max_iterations,
-                approved_records=approved_records,
-            )
+            if not validation.allowed:
+                result = RunResult(False, validation.errors, {})
+            else:
+                github_repository, preflight_errors = resolve_github_repository(
+                    args.project_root,
+                    requested_repository=args.github_repo,
+                )
+                if preflight_errors:
+                    result = RunResult(False, preflight_errors, {})
+                else:
+                    if (
+                        validation.candidate.get("kind") == "feature"
+                        and validation.candidate.get("source")
+                        in {"github", "jira"}
+                    ):
+                        approved_records = discover_evidence(
+                            args.project_root,
+                            github_repository=github_repository,
+                        ).records
+                    result = start_run(
+                        task,
+                        candidate_value,
+                        args.max_iterations,
+                        approved_records=approved_records,
+                        github_repository=github_repository,
+                    )
     elif args.operation == "transition":
         result = transition_run(task, args.next_phase)
     elif args.operation == "evaluate":

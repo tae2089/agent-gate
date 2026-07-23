@@ -114,8 +114,17 @@ Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
 외부 증거 확인:
 
 ```bash
-python3 scripts/evolution_loop.py discover --project-root . --json
+python3 scripts/evolution_loop.py discover --project-root . \
+  --github-repo <owner/repo> --json
 ```
+
+`--github-repo <owner/repo>`를 생략하면 프로젝트 루트에서 canonical
+repository를 자동 해석합니다. 명시한 값은 현재 프로젝트와 일치해야 합니다.
+discovery는 `gh` 실행·인증·repository 접근을 preflight하고
+`github_repository`를 반환합니다. 이 값은 `start`에 한 번 전달되어 상태에
+고정되며, preflight 실패는 코드를 수정하기 전, 즉 before Seed 단계에서
+`blocked`로 종료해야 합니다. 플러그인은 `gh` 설치나 로그인을 대신하지
+않습니다.
 
 Jira는 설정된 경우에만
 `AGENT_GATE_JIRA_BASE_URL`, `AGENT_GATE_JIRA_EMAIL`,

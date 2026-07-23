@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -279,9 +280,122 @@ class EvolutionStateTest(unittest.TestCase):
         )
 
 
+class GitHubRepositoryContextTest(unittest.TestCase):
+    def test_preflight_resolves_canonical_repository_and_accepts_case_insensitive_request(self):
+        commands = []
+
+        def run_command(argv, **kwargs):
+            commands.append(list(argv))
+            if argv[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(
+                argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+            )
+
+        repository, errors = evolution_loop.resolve_github_repository(
+            ROOT,
+            requested_repository="TAE2089/AGENT-GATE",
+            command_runner=run_command,
+        )
+
+        self.assertEqual(repository, "tae2089/agent-gate")
+        self.assertEqual(errors, ())
+        self.assertEqual(
+            commands,
+            [
+                ["gh", "auth", "status"],
+                ["gh", "repo", "view", "--json", "nameWithOwner"],
+            ],
+        )
+
+    def test_malformed_requested_repository_is_rejected_before_gh(self):
+        commands = []
+
+        repository, errors = evolution_loop.resolve_github_repository(
+            ROOT,
+            requested_repository="https://github.com/tae2089/agent-gate",
+            command_runner=lambda argv, **kwargs: commands.append(list(argv)),
+        )
+
+        self.assertIsNone(repository)
+        self.assertIn("owner/repo", " ".join(errors))
+        self.assertEqual(commands, [])
+
+    def test_requested_repository_must_match_project_repository(self):
+        def run_command(argv, **kwargs):
+            if argv[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(
+                argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+            )
+
+        repository, errors = evolution_loop.resolve_github_repository(
+            ROOT,
+            requested_repository="other/project",
+            command_runner=run_command,
+        )
+
+        self.assertIsNone(repository)
+        self.assertIn("does not match", " ".join(errors))
+
+    def test_preflight_failures_are_bounded_and_do_not_expose_stderr(self):
+        cases = (
+            (
+                lambda argv, **kwargs: (_ for _ in ()).throw(
+                    FileNotFoundError("missing gh")
+                ),
+                "could not start",
+            ),
+            (
+                lambda argv, **kwargs: subprocess.CompletedProcess(
+                    argv, 1, "", "credential material"
+                ),
+                "authentication failed",
+            ),
+            (
+                lambda argv, **kwargs: (
+                    subprocess.CompletedProcess(argv, 0, "", "")
+                    if argv[:3] == ["gh", "auth", "status"]
+                    else subprocess.CompletedProcess(
+                        argv, 1, "", "private repository detail"
+                    )
+                ),
+                "repository resolution failed",
+            ),
+            (
+                lambda argv, **kwargs: (
+                    subprocess.CompletedProcess(argv, 0, "", "")
+                    if argv[:3] == ["gh", "auth", "status"]
+                    else subprocess.CompletedProcess(argv, 0, "[]", "")
+                ),
+                "invalid JSON object",
+            ),
+        )
+
+        for run_command, expected in cases:
+            with self.subTest(expected=expected):
+                repository, errors = evolution_loop.resolve_github_repository(
+                    ROOT, command_runner=run_command
+                )
+
+                self.assertIsNone(repository)
+                self.assertIn(expected, " ".join(errors))
+                self.assertNotIn("credential material", " ".join(errors))
+                self.assertNotIn("private repository detail", " ".join(errors))
+
+
 class DiscoveryTest(unittest.TestCase):
     def test_github_issues_and_failed_ci_are_normalized(self):
+        commands = []
+
         def run_command(argv, **kwargs):
+            commands.append(list(argv))
+            if argv[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+                )
             if argv[1:3] == ["issue", "list"]:
                 payload = [
                     {
@@ -311,17 +425,36 @@ class DiscoveryTest(unittest.TestCase):
             ROOT, environment={}, command_runner=run_command
         )
 
+        self.assertEqual(result.github_repository, "tae2089/agent-gate")
         self.assertEqual(result.errors, ("Jira discovery is not configured",))
         self.assertEqual([item["source"] for item in result.records], ["github", "ci"])
         self.assertEqual(result.records[0]["labels"], ["agent-ready", "feature"])
         self.assertEqual(result.records[1]["source_ref"], (
             "https://github.com/tae2089/agent-gate/actions/runs/91"
         ))
+        github_reads = [
+            command
+            for command in commands
+            if command[:3] in (["gh", "issue", "list"], ["gh", "run", "list"])
+        ]
+        self.assertEqual(len(github_reads), 2)
+        self.assertTrue(
+            all(
+                command[command.index("--repo") + 1] == "tae2089/agent-gate"
+                for command in github_reads
+            )
+        )
 
     def test_jira_search_uses_jql_and_never_returns_credentials(self):
         captured = {}
 
         def run_command(argv, **kwargs):
+            if argv[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+                )
             return subprocess.CompletedProcess(argv, 0, "[]", "")
 
         class Response:
@@ -394,6 +527,12 @@ class DiscoveryTest(unittest.TestCase):
 
     def test_source_failures_are_independent_and_bounded(self):
         def run_command(argv, **kwargs):
+            if argv[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+                )
             return subprocess.CompletedProcess(
                 argv, 2, "", "sensitive provider diagnostics"
             )
@@ -420,6 +559,12 @@ class DiscoveryTest(unittest.TestCase):
 
     def test_partial_jira_configuration_does_not_make_a_request(self):
         def run_command(argv, **kwargs):
+            if argv[:3] == ["gh", "auth", "status"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[:3] == ["gh", "repo", "view"]:
+                return subprocess.CompletedProcess(
+                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+                )
             return subprocess.CompletedProcess(argv, 0, "[]", "")
 
         def unexpected_request(request, timeout):
@@ -436,6 +581,52 @@ class DiscoveryTest(unittest.TestCase):
             result.errors,
             ("Jira discovery configuration is incomplete",),
         )
+
+    def test_failed_github_preflight_skips_github_reads_but_keeps_jira(self):
+        commands = []
+
+        def run_command(argv, **kwargs):
+            commands.append(list(argv))
+            raise FileNotFoundError("missing gh")
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return None
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "issues": [
+                            {
+                                "key": "AG-21",
+                                "fields": {
+                                    "summary": "Independent Jira work",
+                                    "description": "Jira remains available",
+                                    "labels": ["agent-ready"],
+                                },
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+        result = evolution_loop.discover_evidence(
+            ROOT,
+            environment={
+                "AGENT_GATE_JIRA_BASE_URL": "https://example.atlassian.net",
+                "AGENT_GATE_JIRA_EMAIL": "agent@example.invalid",
+                "AGENT_GATE_JIRA_API_TOKEN": "non-secret-test-placeholder",
+            },
+            command_runner=run_command,
+            jira_opener=lambda request, timeout: Response(),
+        )
+
+        self.assertIsNone(result.github_repository)
+        self.assertEqual(commands, [["gh", "auth", "status"]])
+        self.assertEqual([record["source"] for record in result.records], ["jira"])
+        self.assertIn("could not start", " ".join(result.errors))
 
 
 class EvaluationGateTest(unittest.TestCase):
@@ -632,7 +823,11 @@ class PublicationTest(unittest.TestCase):
             check=True,
         )
         self.assertTrue(
-            evolution_loop.start_run(self.task, candidate()).allowed
+            evolution_loop.start_run(
+                self.task,
+                candidate(),
+                github_repository="tae2089/agent-gate",
+            ).allowed
         )
         for phase in ("execute", "evaluate", "pr-ready"):
             self.assertTrue(evolution_loop.transition_run(self.task, phase).allowed)
@@ -647,6 +842,10 @@ class PublicationTest(unittest.TestCase):
         )
         self.commands = []
         self.existing_prs = []
+        self.auth_result = subprocess.CompletedProcess([], 0, "", "")
+        self.repository_result = subprocess.CompletedProcess(
+            [], 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
+        )
         self.create_result = subprocess.CompletedProcess(
             [], 0, "https://github.com/tae2089/agent-gate/pull/42\n", ""
         )
@@ -656,6 +855,20 @@ class PublicationTest(unittest.TestCase):
 
     def run_command(self, argv, **kwargs):
         self.commands.append(list(argv))
+        if argv[:3] == ["gh", "auth", "status"]:
+            return subprocess.CompletedProcess(
+                argv,
+                self.auth_result.returncode,
+                self.auth_result.stdout,
+                self.auth_result.stderr,
+            )
+        if argv[:3] == ["gh", "repo", "view"]:
+            return subprocess.CompletedProcess(
+                argv,
+                self.repository_result.returncode,
+                self.repository_result.stdout,
+                self.repository_result.stderr,
+            )
         if argv[:3] == ["gh", "pr", "list"]:
             return subprocess.CompletedProcess(
                 argv, 0, json.dumps(self.existing_prs), ""
@@ -688,6 +901,17 @@ class PublicationTest(unittest.TestCase):
         flattened = [" ".join(command) for command in self.commands]
         self.assertTrue(any(command.startswith("git push ") for command in flattened))
         self.assertTrue(any(command.startswith("gh pr create ") for command in flattened))
+        pr_commands = [
+            command
+            for command in self.commands
+            if command[:3] in (["gh", "pr", "list"], ["gh", "pr", "create"])
+        ]
+        self.assertTrue(
+            all(
+                command[command.index("--repo") + 1] == "tae2089/agent-gate"
+                for command in pr_commands
+            )
+        )
         self.assertFalse(
             any(
                 token in command
@@ -768,6 +992,46 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(result.state["status"], "publish-blocked")
         self.assertNotIn("provider detail", " ".join(result.errors))
 
+    def test_repository_preflight_failure_blocks_before_pr_or_push(self):
+        self.auth_result = subprocess.CompletedProcess(
+            [], 2, "", "provider credential detail"
+        )
+
+        result = evolution_loop.publish_run(
+            self.task,
+            self.project,
+            command_runner=self.run_command,
+        )
+
+        self.assertFalse(result.allowed)
+        self.assertEqual(result.state["status"], "publish-blocked")
+        self.assertIn("authentication failed", " ".join(result.errors))
+        self.assertNotIn("provider credential detail", " ".join(result.errors))
+        self.assertFalse(
+            any(
+                command[:3] in (["gh", "pr", "list"], ["gh", "pr", "create"])
+                or command[:2] == ["git", "push"]
+                for command in self.commands
+            )
+        )
+
+    def test_legacy_state_without_repository_resolves_current_project(self):
+        state_path = self.task / "evolution-state.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        del state["github_repository"]
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+
+        result = evolution_loop.publish_run(
+            self.task,
+            self.project,
+            command_runner=self.run_command,
+        )
+
+        self.assertTrue(result.allowed, result.errors)
+        self.assertTrue(
+            any(command[:3] == ["gh", "repo", "view"] for command in self.commands)
+        )
+
 
 class CommandLineTest(unittest.TestCase):
     def setUp(self):
@@ -775,6 +1039,37 @@ class CommandLineTest(unittest.TestCase):
         self.project = Path(self.temp.name)
         self.task = self.project / "_workspace" / "sample"
         self.task.mkdir(parents=True)
+        executable_dir = self.project / "bin"
+        executable_dir.mkdir()
+        fake_gh = executable_dir / "gh"
+        fake_gh.write_text(
+            f"""#!{sys.executable}
+import json
+import os
+import sys
+
+if sys.argv[1:3] == ["auth", "status"]:
+    if os.environ.get("AGENT_GATE_TEST_GH_AUTH_FAIL"):
+        print("provider credential detail", file=sys.stderr)
+        raise SystemExit(2)
+    raise SystemExit(0)
+if sys.argv[1:3] == ["repo", "view"]:
+    print(json.dumps({{"nameWithOwner": "tae2089/agent-gate"}}))
+    raise SystemExit(0)
+if sys.argv[1:3] in (["issue", "list"], ["run", "list"]):
+    print("[]")
+    raise SystemExit(0)
+raise SystemExit(0)
+""",
+            encoding="utf-8",
+        )
+        fake_gh.chmod(0o755)
+        self.environment = dict(os.environ)
+        self.environment["PATH"] = (
+            str(executable_dir)
+            + os.pathsep
+            + self.environment.get("PATH", "")
+        )
         self.candidate_path = self.task / "candidate-input.json"
         self.candidate_path.write_text(
             json.dumps(candidate()), encoding="utf-8"
@@ -783,7 +1078,7 @@ class CommandLineTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_cli(self, *arguments):
+    def run_cli(self, *arguments, environment=None):
         return subprocess.run(
             [
                 sys.executable,
@@ -793,6 +1088,7 @@ class CommandLineTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=30,
+            env=self.environment if environment is None else environment,
         )
 
     def test_start_transition_and_status_use_json_contract(self):
@@ -803,6 +1099,8 @@ class CommandLineTest(unittest.TestCase):
             str(self.candidate_path),
             "--project-root",
             str(self.project),
+            "--github-repo",
+            "tae2089/agent-gate",
             "--max-iterations",
             "2",
             "--json",
@@ -826,6 +1124,30 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(transitioned.returncode, 0, transitioned.stdout + transitioned.stderr)
         self.assertEqual(status.returncode, 0, status.stdout + status.stderr)
         self.assertEqual(json.loads(status.stdout)["state"]["status"], "execute")
+        self.assertEqual(
+            json.loads(status.stdout)["state"]["github_repository"],
+            "tae2089/agent-gate",
+        )
+
+    def test_start_preflight_failure_writes_no_state_or_provider_diagnostics(self):
+        environment = dict(self.environment)
+        environment["AGENT_GATE_TEST_GH_AUTH_FAIL"] = "1"
+
+        result = self.run_cli(
+            "start",
+            str(self.task),
+            "--candidate",
+            str(self.candidate_path),
+            "--project-root",
+            str(self.project),
+            "--json",
+            environment=environment,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("authentication failed", result.stdout)
+        self.assertNotIn("provider credential detail", result.stdout)
+        self.assertFalse((self.task / "evolution-state.json").exists())
 
     def test_task_outside_direct_workspace_is_rejected(self):
         outside = self.project / "outside"
@@ -897,6 +1219,21 @@ class SkillPackagingTest(unittest.TestCase):
         self.assertIn("working directory inside the disposable clone", normalized)
         self.assertIn("Never retry a denied write", normalized)
         self.assertIn("terminate `blocked`", normalized)
+
+    def test_skill_and_docs_bind_one_preflighted_github_repository(self):
+        skill = (
+            ROOT / "skills" / "evolution-loop" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        docs = (ROOT / "README.md").read_text(encoding="utf-8")
+
+        for content in (skill, docs):
+            normalized = " ".join(content.split())
+            self.assertIn("--github-repo <owner/repo>", normalized)
+            self.assertIn("github_repository", normalized)
+            self.assertIn("before Seed", normalized)
+        self.assertNotIn("codex exec", skill)
+        self.assertNotIn("claude -p", skill)
+        self.assertNotIn("agy -p", skill)
 
     def test_public_metadata_describes_the_optional_evolution_loop(self):
         paths = (
