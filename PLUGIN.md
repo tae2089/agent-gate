@@ -25,10 +25,15 @@ The host may use request-scoped GitHub/Jira MCP tools or skills, CI, repository
 inspection, and code analysis only to enrich that request with untrusted
 evidence; none of those sources can originate or select work.
 
-The loop terminates as `pr-opened`, `no-action`, `needs-clarification`,
-`blocked`, `budget-exhausted`, `publish-blocked`, or `publish-uncertain`. It
-opens at most one ready-for-review PR. It does not merge, deploy, close or
-transition issues, publish releases, or comment on external systems.
+At `pr-ready`, the host uses an available GitHub MCP tool or skill to push and
+verify one ready-for-review PR, then calls the provider-neutral `record-pr`
+command with only its verified HTTPS URL. The Python core performs no provider,
+repository, credential, push, or PR creation work.
+
+The loop terminates as `pr-opened`, `pr-ready`, `no-action`,
+`needs-clarification`, `blocked`, or `budget-exhausted`. It does not merge,
+deploy, close or transition issues, publish releases, or comment on external
+systems.
 
 ## Claude Code
 

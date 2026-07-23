@@ -115,21 +115,14 @@ Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
   `blocked`, 원하는 동작이 모호하면 `needs-clarification`으로 끝냅니다.
 
 후보는 항상 `source: manual`과 비어 있지 않은 원문 `request`를 사용합니다.
-`start`는 로컬 artifact만 검증하므로 `gh`나 Jira 인증 없이 Seed에 진입할 수
-있습니다.
+`start`는 로컬 artifact만 검증하며 provider, repository, credential,
+publication 설정을 받거나 저장하지 않습니다.
 
 ```bash
 python3 scripts/evolution_loop.py start _workspace/evolution-<slug> \
   --candidate _workspace/evolution-<slug>/candidate-input.json \
   --project-root . --max-iterations 3 --json
 ```
-
-현재 프로젝트의 identity를 이미 아는 host는 `start`에
-`--github-repo <owner/repo>`를 한 번 전달할 수 있습니다. 이 단계에서는
-형식만 검증해 `github_repository`를 publication safeguard로 저장합니다.
-`gh` 실행·인증·현재 저장소 일치 확인은 실제 Publish에서만 수행하며, 실패하면
-원격 변경 전에 `publish-blocked`가 됩니다. 플러그인은 `gh` 설치나 로그인을
-대신하지 않습니다.
 
 루프는 direct `_workspace/<task>`의 `candidate.json`,
 `evolution-state.json`, iteration별 `evaluation.json`으로 재개됩니다.
@@ -138,11 +131,24 @@ Completion과 다음 네 evidence check를 함께 요구합니다:
 `planned_scope_only`, `no_speculative_abstraction`,
 `compatibility_has_consumer`, `simpler_alternative_considered`.
 
-terminal은 `pr-opened`, `no-action`, `needs-clarification`, `blocked`,
-`budget-exhausted`, `publish-blocked`, `publish-uncertain`입니다.
-`pr-ready` publication은 clean non-base branch와 current Completion을 다시
-확인하고 정확한 head/base PR을 재사용하거나 하나만 생성합니다. Merge,
-deploy, issue comment/close/transition은 수행하지 않습니다.
+`pr-ready`가 되면 AI host가 사용 가능한 GitHub MCP 또는 skill로 현재
+repository를 확인하고 committed branch를 push한 뒤 정확한 head/base PR을
+재사용하거나 하나만 생성합니다. URL, head SHA, base를 검증한 후 코어에는
+HTTPS receipt만 기록합니다.
+
+```bash
+python3 scripts/evolution_loop.py record-pr _workspace/evolution-<slug> \
+  --project-root . --url <verified-pr-url> --json
+```
+
+`record-pr`는 provider나 subprocess를 호출하지 않습니다. current 100%
+Completion과 URL 형식을 확인해 `pr-ready`를 `pr-opened`로 바꾸며, 같은
+receipt 재실행은 허용하고 다른 receipt는 거부합니다. 원격 capability가
+없거나 결과가 불확실하면 상태를 `pr-ready`로 유지하고 blocker를 보고합니다.
+
+terminal은 `pr-opened`, `pr-ready`, `no-action`, `needs-clarification`,
+`blocked`, `budget-exhausted`입니다. Merge, deploy, issue
+comment/close/transition은 수행하지 않습니다.
 
 전체 실행 절차와 artifact schema는 bundled `evolution-loop` skill에
 있습니다. 로컬 contract test는 세 host가 MCP/skill로 실제 request context를

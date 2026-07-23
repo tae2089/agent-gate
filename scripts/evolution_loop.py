@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -36,7 +35,7 @@ CANDIDATE_ALLOWED_FIELDS = CANDIDATE_REQUIRED_FIELDS
 WORK_KINDS = frozenset(
     {"feature", "bug", "contract-violation", "technical-debt"}
 )
-STATE_REQUIRED_FIELDS = frozenset(
+STATE_FIELDS = frozenset(
     {
         "schema_version",
         "status",
@@ -46,7 +45,6 @@ STATE_REQUIRED_FIELDS = frozenset(
         "pr_url",
     }
 )
-STATE_FIELDS = STATE_REQUIRED_FIELDS | {"github_repository"}
 PHASE_TRANSITIONS = {
     "interview": frozenset({"seed"}),
     "seed": frozenset({"execute"}),
@@ -61,8 +59,6 @@ TERMINAL_STATUSES = frozenset(
         "invalid-candidate",
         "budget-exhausted",
         "pr-ready",
-        "publish-blocked",
-        "publish-uncertain",
         "pr-opened",
     }
 )
@@ -210,7 +206,7 @@ def _load_state(task_dir: Path) -> RunResult:
     if not isinstance(value, dict):
         return RunResult(False, ("evolution state must be an object",), {})
     unknown = sorted(value.keys() - STATE_FIELDS)
-    missing = sorted(STATE_REQUIRED_FIELDS - value.keys())
+    missing = sorted(STATE_FIELDS - value.keys())
     errors = []
     if unknown:
         errors.append(f"evolution state has unknown fields: {', '.join(unknown)}")
@@ -256,14 +252,6 @@ def _load_state(task_dir: Path) -> RunResult:
             errors.append("pr-opened evolution state requires pr_url")
     elif pr_url is not None:
         errors.append("only pr-opened evolution state may contain pr_url")
-    github_repository = value.get("github_repository")
-    if (
-        "github_repository" in value
-        and not _valid_github_repository(github_repository)
-    ):
-        errors.append(
-            "evolution state github_repository must use owner/repo format"
-        )
     if errors:
         return RunResult(False, tuple(errors), value)
     return RunResult(True, (), value)
@@ -294,7 +282,6 @@ def start_run(
     task_dir: Path,
     candidate: Any,
     max_iterations: int = 3,
-    github_repository: Optional[str] = None,
 ) -> RunResult:
     validation = validate_candidate(candidate)
     if not validation.allowed:
@@ -307,15 +294,6 @@ def start_run(
     ):
         return RunResult(
             False, ("max_iterations must be an integer from 1 through 10",), {}
-        )
-    if (
-        github_repository is not None
-        and not _valid_github_repository(github_repository)
-    ):
-        return RunResult(
-            False,
-            ("GitHub repository must use owner/repo format",),
-            {},
         )
     task = Path(task_dir)
     if not task.is_dir() or task.is_symlink():
@@ -346,8 +324,6 @@ def start_run(
         "candidate_sha256": hashlib.sha256(candidate_content).hexdigest(),
         "pr_url": None,
     }
-    if github_repository is not None:
-        state["github_repository"] = github_repository
     try:
         _atomic_write(task / "candidate.json", candidate_content)
         _write_state(task, state)
@@ -403,71 +379,6 @@ def terminate_run(task_dir: Path, status: str) -> RunResult:
     except OSError as exc:
         return RunResult(False, (f"cannot persist evolution state: {exc}",), loaded.state)
     return RunResult(True, (), state)
-
-
-def _valid_github_repository(value: Any) -> bool:
-    if not isinstance(value, str) or value != value.strip():
-        return False
-    parts = value.split("/")
-    return (
-        len(parts) == 2
-        and all(parts)
-        and not any(character.isspace() for character in value)
-        and not any(part.startswith("-") for part in parts)
-    )
-
-
-def resolve_github_repository(
-    project_root: Path,
-    requested_repository: Optional[str] = None,
-    command_runner: Any = subprocess.run,
-) -> tuple[Optional[str], tuple[str, ...]]:
-    if (
-        requested_repository is not None
-        and not _valid_github_repository(requested_repository)
-    ):
-        return None, ("GitHub repository must use owner/repo format",)
-
-    root = Path(project_root).resolve(strict=True)
-    authentication, errors = _command_receipt(
-        ["gh", "auth", "status"],
-        root,
-        command_runner,
-        "GitHub authentication",
-    )
-    if errors:
-        return None, errors
-    assert authentication is not None
-
-    resolved, errors = _command_receipt(
-        ["gh", "repo", "view", "--json", "nameWithOwner"],
-        root,
-        command_runner,
-        "GitHub repository resolution",
-    )
-    if errors:
-        return None, errors
-    assert resolved is not None
-    try:
-        payload = json.loads(resolved.stdout)
-    except json.JSONDecodeError:
-        return None, ("GitHub repository resolution returned invalid JSON",)
-    if (
-        not isinstance(payload, dict)
-        or not _valid_github_repository(payload.get("nameWithOwner"))
-    ):
-        return None, (
-            "GitHub repository resolution returned an invalid JSON object",
-        )
-    repository = payload["nameWithOwner"]
-    if (
-        requested_repository is not None
-        and requested_repository.casefold() != repository.casefold()
-    ):
-        return None, (
-            "requested GitHub repository does not match the project repository",
-        )
-    return repository, ()
 
 
 def _validate_evaluation(
@@ -624,158 +535,51 @@ def evaluate_run(
     return terminate_run(task, verdict)
 
 
-def _command_receipt(
-    argv: list[str],
-    project_root: Path,
-    command_runner: Any,
-    label: str,
-) -> tuple[Optional[subprocess.CompletedProcess], tuple[str, ...]]:
-    try:
-        completed = command_runner(
-            argv,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None, (f"{label} could not start",)
-    if completed.returncode != 0:
-        return completed, (
-            f"{label} failed with exit code {completed.returncode}",
-        )
-    return completed, ()
-
-
-def _publication_state(
-    task: Path,
-    original: Mapping[str, Any],
-    status: str,
-    pr_url: Optional[str] = None,
-) -> RunResult:
-    state = dict(original)
-    state["status"] = status
-    state["pr_url"] = pr_url
-    try:
-        _write_state(task, state)
-    except OSError as exc:
-        return RunResult(
-            False,
-            (f"cannot persist publication state: {exc}",),
-            original,
-        )
-    return RunResult(status == "pr-opened", (), state)
-
-
-def _pr_url(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
+def _recorded_pr_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or value != value.strip():
         return None
-    stripped = value.strip()
-    parsed = urlparse(stripped)
+    parsed = urlparse(value)
     if (
         parsed.scheme != "https"
         or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
         or not parsed.path
-        or "/pull/" not in parsed.path
+        or parsed.path == "/"
         or parsed.query
         or parsed.fragment
     ):
         return None
-    return stripped
+    return value
 
 
-def _pr_input(task: Path) -> tuple[Optional[str], Optional[Path], tuple[str, ...]]:
-    title_path = task / "pr-title.txt"
-    body_path = task / "pr-body.md"
-    if title_path.is_symlink() or body_path.is_symlink():
-        return None, None, ("PR title and body must not be symlinks",)
-    try:
-        title = title_path.read_text(encoding="utf-8").strip()
-        body = body_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        return None, None, (f"cannot read PR title or body: {exc}",)
-    if not title or "\n" in title or len(title) > 256:
-        return None, None, ("PR title must be one non-empty line up to 256 characters",)
-    if not body.strip():
-        return None, None, ("PR body must be non-empty",)
-    return title, body_path, ()
-
-
-def publish_run(
-    task_dir: Path,
-    project_root: Path,
-    base_branch: str = "main",
-    command_runner: Any = subprocess.run,
+def record_pr(
+    task_dir: Path, project_root: Path, pr_url: Any
 ) -> RunResult:
     task = Path(task_dir)
-    root = Path(project_root).resolve(strict=True)
     loaded = _load_state(task)
     if not loaded.allowed:
         return loaded
-    if (
-        loaded.state["status"] == "pr-opened"
-        and _pr_url(loaded.state.get("pr_url")) is not None
-    ):
-        return RunResult(True, (), loaded.state)
+
+    recorded_url = _recorded_pr_url(pr_url)
+    if recorded_url is None:
+        return RunResult(
+            False, ("pull request receipt must be an absolute HTTPS URL",), loaded.state
+        )
+    if loaded.state["status"] == "pr-opened":
+        if loaded.state["pr_url"] == recorded_url:
+            return RunResult(True, (), loaded.state)
+        return RunResult(
+            False,
+            ("a different pull request receipt is already recorded",),
+            loaded.state,
+        )
     if loaded.state["status"] != "pr-ready":
         return RunResult(
             False, ("evolution run is not pr-ready",), loaded.state
         )
-    if (
-        not isinstance(base_branch, str)
-        or not base_branch
-        or base_branch.startswith("-")
-        or any(character.isspace() for character in base_branch)
-    ):
-        return RunResult(False, ("base branch is invalid",), loaded.state)
 
-    status, errors = _command_receipt(
-        ["git", "status", "--porcelain"], root, command_runner, "git status"
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert status is not None
-    if status.stdout.strip():
-        return RunResult(False, ("worktree must be clean",), loaded.state)
-
-    branch_receipt, errors = _command_receipt(
-        ["git", "branch", "--show-current"],
-        root,
-        command_runner,
-        "git branch",
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert branch_receipt is not None
-    branch = branch_receipt.stdout.strip()
-    if not branch or branch == base_branch:
-        return RunResult(
-            False,
-            ("publication requires a non-base named branch",),
-            loaded.state,
-        )
-    ahead, errors = _command_receipt(
-        ["git", "rev-list", "--count", f"{base_branch}..HEAD"],
-        root,
-        command_runner,
-        "git rev-list",
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert ahead is not None
-    try:
-        ahead_count = int(ahead.stdout.strip())
-    except ValueError:
-        return RunResult(
-            False, ("git rev-list returned an invalid count",), loaded.state
-        )
-    if ahead_count < 1:
-        return RunResult(
-            False, ("publication branch has no commits above base",), loaded.state
-        )
-
-    completion = validate_completion(task, root)
+    completion = validate_completion(task, Path(project_root))
     if not completion.allowed:
         return RunResult(
             False,
@@ -783,124 +587,18 @@ def publish_run(
             + completion.errors,
             loaded.state,
         )
-    title, body_path, errors = _pr_input(task)
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert title is not None and body_path is not None
-
-    github_repository, errors = resolve_github_repository(
-        root,
-        requested_repository=loaded.state.get("github_repository"),
-        command_runner=command_runner,
-    )
-    if errors:
-        blocked = _publication_state(
-            task, loaded.state, "publish-blocked"
-        )
-        return RunResult(False, errors, blocked.state)
-    assert github_repository is not None
-
-    existing, errors = _command_receipt(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--repo",
-            github_repository,
-            "--state",
-            "all",
-            "--head",
-            branch,
-            "--base",
-            base_branch,
-            "--limit",
-            "2",
-            "--json",
-            "url,state,headRefName,baseRefName",
-        ],
-        root,
-        command_runner,
-        "GitHub PR lookup",
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert existing is not None
+    state = dict(loaded.state)
+    state["status"] = "pr-opened"
+    state["pr_url"] = recorded_url
     try:
-        prs = json.loads(existing.stdout)
-    except json.JSONDecodeError:
-        return RunResult(
-            False, ("GitHub PR lookup returned invalid JSON",), loaded.state
-        )
-    if not isinstance(prs, list) or any(not isinstance(pr, dict) for pr in prs):
-        return RunResult(
-            False, ("GitHub PR lookup must return an array of objects",), loaded.state
-        )
-    exact = [
-        pr
-        for pr in prs
-        if pr.get("headRefName") == branch and pr.get("baseRefName") == base_branch
-    ]
-    if len(exact) > 1:
-        return RunResult(
-            False, ("multiple pull requests exist for the exact head and base",), loaded.state
-        )
-    if exact:
-        existing_url = _pr_url(exact[0].get("url"))
-        if existing_url is None:
-            return RunResult(
-                False, ("existing pull request has an invalid URL",), loaded.state
-            )
-        return _publication_state(task, loaded.state, "pr-opened", existing_url)
-
-    _, errors = _command_receipt(
-        ["git", "push", "--set-upstream", "origin", branch],
-        root,
-        command_runner,
-        "git push",
-    )
-    if errors:
-        blocked = _publication_state(
-            task, loaded.state, "publish-blocked"
-        )
-        return RunResult(False, errors, blocked.state)
-
-    created, errors = _command_receipt(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--repo",
-            github_repository,
-            "--base",
-            base_branch,
-            "--head",
-            branch,
-            "--title",
-            title,
-            "--body-file",
-            str(body_path),
-        ],
-        root,
-        command_runner,
-        "GitHub PR creation",
-    )
-    if errors:
-        blocked = _publication_state(
-            task, loaded.state, "publish-blocked"
-        )
-        return RunResult(False, errors, blocked.state)
-    assert created is not None
-    created_url = _pr_url(created.stdout)
-    if created_url is None:
-        uncertain = _publication_state(
-            task, loaded.state, "publish-uncertain"
-        )
+        _write_state(task, state)
+    except OSError as exc:
         return RunResult(
             False,
-            ("GitHub PR creation returned an invalid URL",),
-            uncertain.state,
+            (f"cannot persist pull request receipt: {exc}",),
+            loaded.state,
         )
-    return _publication_state(task, loaded.state, "pr-opened", created_url)
+    return RunResult(True, (), state)
 
 
 def _direct_task(
@@ -966,7 +664,6 @@ def main() -> int:
     start.add_argument("task", type=Path)
     start.add_argument("--candidate", required=True, type=Path)
     start.add_argument("--project-root", required=True, type=Path)
-    start.add_argument("--github-repo")
     start.add_argument("--max-iterations", type=int, default=3)
     start.add_argument("--json", action="store_true")
 
@@ -995,11 +692,11 @@ def main() -> int:
     status.add_argument("--project-root", required=True, type=Path)
     status.add_argument("--json", action="store_true")
 
-    publish = subparsers.add_parser("publish")
-    publish.add_argument("task", type=Path)
-    publish.add_argument("--project-root", required=True, type=Path)
-    publish.add_argument("--base-branch", default="main")
-    publish.add_argument("--json", action="store_true")
+    record_pr_parser = subparsers.add_parser("record-pr")
+    record_pr_parser.add_argument("task", type=Path)
+    record_pr_parser.add_argument("--project-root", required=True, type=Path)
+    record_pr_parser.add_argument("--url", required=True)
+    record_pr_parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
     if args.operation == "status" and args.task is None:
@@ -1027,7 +724,6 @@ def main() -> int:
                 task,
                 candidate_value,
                 args.max_iterations,
-                github_repository=args.github_repo,
             )
     elif args.operation == "transition":
         result = transition_run(task, args.next_phase)
@@ -1042,12 +738,8 @@ def main() -> int:
         )
     elif args.operation == "terminate":
         result = terminate_run(task, args.status)
-    elif args.operation == "publish":
-        result = publish_run(
-            task,
-            args.project_root,
-            base_branch=args.base_branch,
-        )
+    elif args.operation == "record-pr":
+        result = record_pr(task, args.project_root, args.url)
     else:
         result = _load_state(task)
 
