@@ -6,7 +6,7 @@ in `.claude/skill-rules.json` are shared; each host reads its own manifest.
 | Host | Manifest | Hooks file | Script root |
 |------|----------|-----------|-------------|
 | Claude Code | `.claude-plugin/plugin.json` (+ `.claude-plugin/marketplace.json`) | `hooks/hooks.json` | `${CLAUDE_PLUGIN_ROOT}` |
-| Codex CLI | `.codex-plugin/plugin.json` | `hooks/hooks.json` (shared) | `${CLAUDE_PLUGIN_ROOT}` (Codex compat shim) |
+| Codex CLI | `.codex-plugin/plugin.json` | `hooks/hooks.json` + `hooks/codex-hooks.json` | `${CLAUDE_PLUGIN_ROOT}` (Codex compat shim) |
 | Antigravity | `plugin.json` (root) | `hooks.json` (root) | `$HOME/.gemini/antigravity-cli/plugins/agent-gate` |
 
 Requires `python3` on PATH. Hooks are stdlib-only.
@@ -25,7 +25,7 @@ through `${CLAUDE_PLUGIN_ROOT}`.
 Enable hooks once in `~/.codex/config.toml`:
 ```toml
 [features]
-codex_hooks = true
+hooks = true
 ```
 Then:
 ```
@@ -33,9 +33,11 @@ codex plugin marketplace add <owner>/agent-gate
 codex plugin add agent-gate
 /reload-plugins
 ```
-Codex exports `CLAUDE_PLUGIN_ROOT` for Claude-plugin compatibility, so it reads
-the same `hooks/hooks.json`. Plugin-bundled hooks are non-managed — Codex will
-ask you to review/trust them on first use.
+Codex exports `CLAUDE_PLUGIN_ROOT` for Claude-plugin compatibility. Shared
+lifecycle hooks stay in `hooks/hooks.json`; the supplemental
+`hooks/codex-hooks.json` adds the `PreCompact(manual|auto)` handoff barrier.
+Plugin-bundled hooks are non-managed — Codex will ask you to review/trust the
+exact definitions on first use and again after they change.
 
 ## Antigravity (`agy`)
 

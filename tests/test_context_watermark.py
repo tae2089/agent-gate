@@ -237,6 +237,85 @@ class TestWatermark(WatermarkHarness):
         )
         self.assertEqual(list(marker.parent.glob(".session-marker-*.tmp")), [])
 
+    def test_t20_codex_stop_uses_codex_block_contract(self):
+        self.write_transcript([assistant_usage(185_000)])
+
+        proc = self.run_hook(self.hook_input(
+            hook_event_name="Stop",
+            turn_id="turn-1",
+            model="gpt-5.6-sol",
+        ))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["continue"], False)
+        self.assertIn("handoff", verdict["stopReason"])
+        self.assertEqual(verdict["systemMessage"], verdict["stopReason"])
+        self.assertNotIn("decision", verdict)
+
+    def test_t21_claude_stop_keeps_claude_block_contract(self):
+        self.write_transcript([assistant_usage(185_000)])
+
+        proc = self.run_hook(self.hook_input(hook_event_name="Stop"))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("handoff", verdict["reason"])
+        self.assertNotIn("continue", verdict)
+
+    def test_t22_codex_precompact_blocks_even_below_threshold(self):
+        self.write_transcript([assistant_usage(100_000)])
+
+        proc = self.run_hook(self.hook_input(
+            hook_event_name="PreCompact",
+            trigger="auto",
+            turn_id="turn-1",
+            model="gpt-5.6-sol",
+        ))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["continue"], False)
+        self.assertIn("compaction", verdict["stopReason"])
+
+    def test_t23_codex_precompact_allows_valid_current_turn_handoff(self):
+        handoff = self.dir / "handoff.md"
+        handoff.write_text(GOOD_HANDOFF, encoding="utf-8")
+        self.write_transcript([
+            user_text("handoff를 작성해"),
+            write_call(str(handoff)),
+            tool_result(),
+            assistant_usage(100_000),
+        ])
+
+        proc = self.run_hook(self.hook_input(
+            hook_event_name="PreCompact",
+            trigger="manual",
+            turn_id="turn-1",
+            model="gpt-5.6-sol",
+        ))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), "")
+
+    def test_t24_codex_precompact_blocks_when_usage_is_missing(self):
+        self.write_transcript([
+            {"type": "user", "message": {"role": "user", "content": "계속"}},
+        ])
+
+        proc = self.run_hook(self.hook_input(
+            hook_event_name="PreCompact",
+            trigger="auto",
+            turn_id="turn-1",
+            model="gpt-5.6-sol",
+        ))
+
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        verdict = json.loads(proc.stdout)
+        self.assertEqual(verdict["continue"], False)
+        self.assertIn("Compaction is starting", verdict["stopReason"])
+
 
 if __name__ == "__main__":
     unittest.main()

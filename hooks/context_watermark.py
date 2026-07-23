@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Stop-hook watermark: when context usage crosses a threshold, block turn end
-until the agent writes a handoff artifact.
+"""Stop/PreCompact watermark: block context loss until the agent writes a
+handoff artifact.
 
 Detection is deterministic (token usage from the transcript); writing the
 handoff is creative work left to the agent. Context size is the last assistant
@@ -94,14 +94,32 @@ def run_hook(window: int, threshold: float) -> int:
     return run_fail_open(LABEL, lambda: _run_hook(hook_input, window, threshold))
 
 
+def _print_block(hook_input: dict, reason: str) -> None:
+    """Emit the blocking verdict shape required by the active host."""
+    # Codex turn-scoped hooks add turn_id and use continue/stopReason; Claude
+    # Stop hooks use decision/reason. See https://learn.chatgpt.com/docs/hooks.
+    if isinstance(hook_input.get("turn_id"), str):
+        print(json.dumps({
+            "continue": False,
+            "stopReason": reason,
+            "systemMessage": reason,
+        }, ensure_ascii=False))
+        return
+    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+
+
 def _run_hook(hook_input: dict, window: int, threshold: float) -> int:
     entries = parse_transcript(Path(hook_input.get("transcript_path")))
+    compaction_due = hook_input.get("hook_event_name") == "PreCompact"
     tokens = context_tokens(entries)
-    if tokens is None:
+    if tokens is None and not compaction_due:
         return 0
-    window = context_window(entries) or window
-    pct = tokens / window
-    if pct < threshold:
+    if tokens is not None:
+        window = context_window(entries) or window
+        pct = tokens / window
+    else:
+        pct = None
+    if pct is not None and pct < threshold and not compaction_due:
         return 0
     cwd = Path(hook_input.get("cwd"))
     handoff, lint_notes = handoff_written(entries, cwd)
@@ -112,8 +130,13 @@ def _run_hook(hook_input: dict, window: int, threshold: float) -> int:
     if lint_notes:
         lint_suffix = (" A handoff was written but failed the structural lint — fix it: "
                        + "; ".join(lint_notes) + ".")
+    usage = (
+        f"Context is {pct:.0%} full ({tokens}/{window} tokens)."
+        if pct is not None
+        else "Compaction is starting."
+    )
     reason = (
-        f"[agent-gate] Context is {pct:.0%} full ({tokens}/{window} tokens).{lint_suffix} "
+        f"[agent-gate] {usage}{lint_suffix} "
         "Before finishing, write a handoff artifact so work survives compaction: "
         "create _workspace/<current-task>/handoff.md (or handoff.md in cwd if no task folder) "
         "covering: current goal, work completed with file paths, key decisions and why, "
@@ -122,7 +145,7 @@ def _run_hook(hook_input: dict, window: int, threshold: float) -> int:
         "they are the most expensive to rediscover and lose the most in summary), "
         "verified state (tests/commands run), and exact next steps. Then finish the turn."
     )
-    print(json.dumps({"decision": "block", "reason": reason}, ensure_ascii=False))
+    _print_block(hook_input, reason)
     return 0
 
 

@@ -811,22 +811,22 @@
 
           <article class="feature-card" data-feature="context-watermark" data-decision="insufficient-evidence" data-stage="evolution">
             <div class="feature-top"><div><p class="feature-id">F-06 · context-watermark</p><h3>컨텍스트 소진 전 handoff 강제</h3></div><span class="badge insufficient-evidence">근거 부족</span></div>
-            <p class="summary">transcript의 실제 token usage가 임계치를 넘으면 현재 턴에 구조적으로 유효한 handoff가 작성될 때까지 Stop을 막습니다.</p>
-            <div class="meta-row"><span class="meta">owner: context-watermark</span><span class="meta">Stop hook</span><span class="meta">80% default</span><span class="meta">158 LOC</span><span class="meta">host-limited</span></div>
+            <p class="summary">Stop에서 실제 token usage가 80%를 넘으면 handoff를 요구하고, Codex PreCompact에서는 usage와 무관하게 압축 직전 유효한 handoff를 최종 확인합니다.</p>
+            <div class="meta-row"><span class="meta">owner: context-watermark</span><span class="meta">Stop + PreCompact</span><span class="meta">80% default</span><span class="meta">181 LOC</span><span class="meta">Codex contract</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>compaction 전에 목표·결정·검증 상태가 파일로 대피된다.</dd>
-              <dt>입력 → 출력</dt><dd>usage + current-turn writes + handoff lint → pass 또는 block</dd>
+              <dt>입력 → 출력</dt><dd>event + usage + current-turn writes + handoff lint → host별 pass 또는 block</dd>
               <dt>겹침</dt><dd>handoff-reinject가 저장된 handoff를 다음 컨텍스트에 다시 넣는다.</dd>
-              <dt>한계</dt><dd>usage가 없는 host에서는 fail-open하며 Antigravity에는 연결되지 않는다.</dd>
+              <dt>한계</dt><dd>Codex PreCompact는 usage 없이도 동작하지만 Antigravity watermark에는 연결되지 않는다. 변경된 hook은 host에서 다시 신뢰해야 한다.</dd>
               <dt>검토 결론</dt><dd>handoff가 실제로 몇 번 강제되고 유용했는지 측정 후 reinject와 세트로 판단.</dd>
-              <dt>더 작은 대안</dt><dd>신뢰할 수 있는 pre-compact 이벤트가 생기면 token 임계 계산을 없애고 그 이벤트에서만 handoff를 요구한다.</dd>
+              <dt>더 작은 대안</dt><dd>모든 지원 host가 신뢰할 수 있는 PreCompact를 제공하면 80% token watermark를 제거하고 압축 경계 하나로 통합한다.</dd>
               <dt>삭제 조건</dt><dd>강제 handoff가 재개 오류를 줄이지 않거나 native summary만으로 같은 결과가 날 때.</dd>
             </dl>
             <details><summary>동작·비용·근거 보기</summary><div class="detail-body">
-              <h4>동작</h4><p>마지막 assistant usage와 context window를 읽고, 성공한 현재-turn Write의 handoff 경로·구조 lint를 확인한 뒤 session marker를 기록합니다.</p>
-              <h4>구조적 비용</h4><p>watermark 158줄 + handoff state 90줄 + 공유 marker. 테스트 270줄.</p>
+              <h4>동작</h4><p>Stop은 마지막 assistant usage와 context window를 읽습니다. Codex PreCompact는 usage 없이도 실행하며, 성공한 현재-turn Write의 경로·구조 lint를 확인한 뒤 session marker를 기록합니다. 차단 결과는 Claude와 Codex 형식으로 분리합니다.</p>
+              <h4>구조적 비용</h4><p>watermark 181줄 + handoff state 90줄 + Codex PreCompact manifest 15줄. watermark 테스트 349줄.</p>
               <h4>제거 전 질문</h4><p>최근 30개 긴 작업에서 block 발생 횟수, handoff 후 재질문 감소, 잘못된 임계 차단 횟수는 얼마인가?</p>
-              <h4>Evidence</h4><div class="evidence"><a href="../hooks/context_watermark.py">hooks/context_watermark.py</a><a href="../hooks/handoff_state.py">hooks/handoff_state.py</a><a href="../README.md">README.md:127-143</a></div>
+              <h4>Evidence</h4><div class="evidence"><a href="../hooks/context_watermark.py">hooks/context_watermark.py</a><a href="../hooks/handoff_state.py">hooks/handoff_state.py</a><a href="../.codex/hooks.json">.codex/hooks.json</a><a href="../README.md">README.md:127-143</a></div>
             </div></details>
           </article>
 

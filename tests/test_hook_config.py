@@ -64,6 +64,26 @@ class TestHookConfig(unittest.TestCase):
         self.assertIn("--mode pre", pre[0]["hooks"][0]["command"])
         self.assertIn("--mode bind", post[0]["hooks"][0]["command"])
 
+    def test_codex_project_wires_watermark_before_manual_and_auto_compaction(self):
+        config = self.load(".codex/hooks.json")
+        groups = config["hooks"]["PreCompact"]
+
+        self.assertEqual(groups[0]["matcher"], "manual|auto")
+        commands = [hook["command"] for hook in groups[0]["hooks"]]
+        self.assertTrue(any("context_watermark.py" in command for command in commands))
+
+    def test_codex_plugin_packages_precompact_watermark_hook(self):
+        manifest = self.load(".codex-plugin/plugin.json")
+        hook_paths = manifest["hooks"]
+
+        self.assertIsInstance(hook_paths, list)
+        self.assertIn("./hooks/hooks.json", hook_paths)
+        self.assertIn("./hooks/codex-hooks.json", hook_paths)
+        config = self.load("hooks/codex-hooks.json")
+        groups = config["hooks"]["PreCompact"]
+        self.assertEqual(groups[0]["matcher"], "manual|auto")
+        self.assertIn("context_watermark.py", groups[0]["hooks"][0]["command"])
+
     def test_antigravity_plugin_packages_root_hooks(self):
         hooks_path = ROOT / "hooks.json"
         self.assertTrue(hooks_path.is_file(), "Antigravity plugins require root hooks.json")
