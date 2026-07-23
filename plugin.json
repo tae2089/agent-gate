@@ -1,4 +1,4 @@
 {
   "name": "agent-gate",
-  "description": "Structural design and executable completion checks for coding agents, with bundled handoff and skill-verification support. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
+  "description": "Structural design and executable completion gates with an optional evidence-driven evolutionary loop. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
 }

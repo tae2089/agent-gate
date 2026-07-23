@@ -1,12 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-gate",
+  "description": "Marketplace for the agent-gate deterministic gates and optional evolutionary loop.",
   "owner": { "name": "agent-gate" },
   "plugins": [
     {
       "name": "agent-gate",
       "source": ".",
-      "description": "Structural design and executable completion checks for coding agents, with bundled handoff and skill-verification support."
+      "description": "Structural design and executable completion gates with an optional evidence-driven evolutionary loop and lifecycle support."
     }
   ]
 }

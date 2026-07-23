@@ -16,6 +16,19 @@ validation. Default manifests wire only Design Gate. The verifier, watermark,
 and handoff reinjection remain bundled lifecycle support but require explicit
 opt-in; they do not participate in either gate's verdict.
 
+The optional `evolution-loop` skill adds one evidence-driven self-evolution
+workflow for this repository. The selected host independently runs
+`Interview → Seed → Execute → Evaluate`; shared JSON artifacts and the existing
+Design/Completion gates own lifecycle transitions. Product features require a
+verbatim manual request or an `agent-ready` GitHub/Jira issue. Reproducible
+bugs, contract violations, and technical debt may also originate from CI,
+repository, or code evidence.
+
+The loop terminates as `pr-opened`, `no-action`, `needs-clarification`,
+`blocked`, `budget-exhausted`, `publish-blocked`, or `publish-uncertain`. It
+opens at most one ready-for-review PR. It does not merge, deploy, close or
+transition issues, publish releases, or comment on external systems.
+
 ## Claude Code
 
 ```
