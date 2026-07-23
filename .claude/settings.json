@@ -1,53 +1,5 @@
 {
   "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PROJECT_DIR}/hooks/skill_invocation_verifier.py",
-              "--rules",
-              "${CLAUDE_PROJECT_DIR}/.claude/skill-rules.json"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PROJECT_DIR}/hooks/context_watermark.py",
-              "--window",
-              "1000000"
-            ]
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3",
-            "args": ["${CLAUDE_PROJECT_DIR}/hooks/handoff_reinject.py"]
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "manual|auto",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3",
-            "args": ["${CLAUDE_PROJECT_DIR}/hooks/context_watermark.py"]
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit|apply_patch",

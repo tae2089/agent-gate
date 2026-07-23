@@ -12,9 +12,9 @@ in `.claude/skill-rules.json` are shared; each host reads its own manifest.
 Requires `python3` on PATH. Hooks are stdlib-only.
 
 The core product is the structural Design Gate plus executable Completion
-validation. The verifier, watermark, and handoff reinjection are bundled
-lifecycle support and are **default-enabled** by the current plugin manifests;
-they do not participate in either gate's verdict.
+validation. Default manifests wire only Design Gate. The verifier, watermark,
+and handoff reinjection remain bundled lifecycle support but require explicit
+opt-in; they do not participate in either gate's verdict.
 
 ## Claude Code
 
@@ -38,9 +38,8 @@ codex plugin marketplace add <owner>/agent-gate
 codex plugin add agent-gate
 /reload-plugins
 ```
-Codex exports `CLAUDE_PLUGIN_ROOT` for Claude-plugin compatibility. Shared
-lifecycle hooks, including the `PreCompact(manual|auto)` handoff barrier, stay
-in `hooks/hooks.json`.
+Codex exports `CLAUDE_PLUGIN_ROOT` for Claude-plugin compatibility. The shared
+`hooks/hooks.json` contains only the Design Gate by default.
 Plugin-bundled hooks are non-managed — Codex will ask you to review/trust the
 exact definitions on first use and again after they change.
 
@@ -55,18 +54,18 @@ which the root `hooks.json` references by absolute path (`$HOME/...`) — the
 staging location is fixed, so no plugin-root variable is needed.
 
 ### Antigravity coverage (by design, not omission)
-- Design Gate (PreToolUse) and verifier (Stop) — supported via the
+- Design Gate (PreToolUse) is enabled by default through the
   `antigravity_adapter.py` shim (`write_to_file`→`Write`, `IsSkillFile`→skill).
 - Completion is an explicit host-neutral local completion CLI command, not a
   lifecycle hook. CI enforcement exists only when task artifacts are available
   and the command is separately wired by the downstream project.
-- reinject — supported via `PreInvocation` + `injectSteps` on each `CHECKPOINT`
-  (compaction).
+- verifier and reinject are supported as opt-in hooks via
+  `skill_invocation_verifier.py` and `antigravity_reinject.py`.
 - watermark — **unsupported**: the Antigravity CLI records no token/usage in
   any readable store, and gating on a char-count estimate would make a
   deterministic gate probabilistic. Reinject covers context-loss recovery.
 
-### Lifecycle capability matrix
+### Optional lifecycle capability matrix
 
 | Capability | Claude Code | Codex CLI | Antigravity |
 |------------|-------------|-----------|-------------|
@@ -86,11 +85,30 @@ missing capabilities are not approximated.
 The matrix and contract tests do not prove that an installed host consumes
 lifecycle verdicts end to end.
 
+## Optional lifecycle wiring
+
+The default installation needs no lifecycle configuration beyond Design Gate.
+To enforce semantic skill invocation, copy a Stop entry that invokes
+`skill_invocation_verifier.py --rules .claude/skill-rules.json`.
+
+For Claude and Codex context preservation, **Enable watermark and reinject
+together**: wire `context_watermark.py` to Stop and
+`PreCompact(manual|auto)`, then wire `handoff_reinject.py` to
+`SessionStart(compact)`. The complete repository-root JSON example is in
+`README.md`.
+
+Antigravity has no deterministic watermark source. Its independent opt-in
+choices are a Stop verifier through `antigravity_adapter.py` and checkpoint
+reinjection through `antigravity_reinject.py`.
+
+After editing hook configuration, reload the plugin or start a new session so
+the host does not retain a cached manifest. Codex supports `/reload-plugins`.
+
 ## Rules and your personal skills
 
-The plugin carries **your** ruleset — `.claude/skill-rules.json` in this repo —
-and the verifier hooks point `--rules` at it, so the same enforcement travels
-to every project you install the plugin into.
+The plugin carries **your** ruleset — `.claude/skill-rules.json` in this repo.
+When the optional verifier hook is enabled, point `--rules` at this file so the
+same enforcement travels to every project using that configuration.
 
 - **The rules reference skills, the host resolves them.** The verifier only
   checks the transcript for whether `Skill(X)` was invoked; it does not load

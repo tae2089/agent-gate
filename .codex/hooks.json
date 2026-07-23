@@ -1,27 +1,5 @@
 {
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/handoff_reinject.py\""
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "manual|auto",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/context_watermark.py\""
-          }
-        ]
-      }
-    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit|apply_patch",
@@ -29,20 +7,6 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/design_gate_hook.py\""
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/skill_invocation_verifier.py\" --rules \"$r/.claude/skill-rules.json\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/context_watermark.py\""
           }
         ]
       }

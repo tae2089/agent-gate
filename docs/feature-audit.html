@@ -706,8 +706,8 @@
         <div class="feature-grid" id="feature-grid">
           <article class="feature-card" data-feature="skill-verifier" data-decision="simplify" data-stage="execute evaluate">
             <div class="feature-top"><div><p class="feature-id">F-01 · skill-verifier</p><h3>필수 skill / MCP 누락 차단</h3></div><span class="badge simplify">축소 후보</span></div>
-            <p class="summary">현재 턴이 규칙에 걸렸는데 필요한 Skill 또는 tool 호출이 없으면 Stop에서 종료를 막습니다.</p>
-            <div class="meta-row"><span class="meta">owner: verifier</span><span class="meta">Stop hook</span><span class="meta">1 rule</span><span class="meta">fail-open</span><span class="meta">221 LOC</span></div>
+            <p class="summary">Opt-in Stop hook을 연결한 프로젝트에서 현재 턴이 규칙에 걸렸는데 필요한 Skill 또는 tool 호출이 없으면 종료를 막습니다.</p>
+            <div class="meta-row"><span class="meta">owner: verifier</span><span class="meta">opt-in Stop hook</span><span class="meta">1 rule</span><span class="meta">fail-open</span><span class="meta">221 LOC</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>중요한 작업이 지정된 전문 절차를 거치지 않고 끝나지 않는다.</dd>
               <dt>입력 → 출력</dt><dd>transcript + rules JSON → pass 또는 교정 지시를 포함한 block</dd>
@@ -790,8 +790,8 @@
 
           <article class="feature-card" data-feature="completion-gate" data-decision="required" data-stage="seed evaluate evolution">
             <div class="feature-top"><div><p class="feature-id">F-05 · Completion Gate</p><h3>최신 시나리오 100% 완료 판정</h3></div><span class="badge required">필수</span></div>
-            <p class="summary">각 시나리오의 direct argv를 실행하고 모든 최신 결과가 통과해 추적 완성도 100%일 때만 명시적 CLI 또는 CI 완료를 허용합니다.</p>
-            <div class="meta-row"><span class="meta">owner: completion-gate</span><span class="meta">CLI / CI</span><span class="meta">explicit finish</span><span class="meta">no LLM</span></div>
+            <p class="summary">각 시나리오의 direct argv를 실행하고 모든 최신 결과가 통과해 추적 완성도 100%일 때만 명시적 local CLI 완료를 허용합니다. Downstream CI는 task artifact와 명령을 별도로 연결해야 합니다.</p>
+            <div class="meta-row"><span class="meta">owner: completion-gate</span><span class="meta">local CLI</span><span class="meta">explicit finish</span><span class="meta">no LLM</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>선언한 모든 시나리오가 현재 task·flow·contract·source에서 통과했다.</dd>
               <dt>입력 → 출력</dt><dd>scenario contract + argv checks → result + 추적 완성도 + completion verdict</dd>
@@ -811,8 +811,8 @@
 
           <article class="feature-card" data-feature="context-watermark" data-decision="insufficient-evidence" data-stage="evolution">
             <div class="feature-top"><div><p class="feature-id">F-06 · context-watermark</p><h3>컨텍스트 소진 전 handoff 강제</h3></div><span class="badge insufficient-evidence">근거 부족</span></div>
-            <p class="summary">Stop에서 실제 token usage가 80%를 넘으면 handoff를 요구하고, Claude/Codex PreCompact에서는 usage와 무관하게 압축 직전 유효한 handoff를 최종 확인합니다.</p>
-            <div class="meta-row"><span class="meta">owner: context-watermark</span><span class="meta">Stop + PreCompact</span><span class="meta">80% default</span><span class="meta">181 LOC</span><span class="meta">event semantics</span></div>
+            <p class="summary">Opt-in Stop에서 실제 token usage가 80%를 넘으면 handoff를 요구하고, opt-in Claude/Codex PreCompact에서는 usage와 무관하게 압축 직전 유효한 handoff를 최종 확인합니다.</p>
+            <div class="meta-row"><span class="meta">owner: context-watermark</span><span class="meta">opt-in Stop + PreCompact</span><span class="meta">80% threshold</span><span class="meta">181 LOC</span><span class="meta">event semantics</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>compaction 전에 목표·결정·검증 상태가 파일로 대피된다.</dd>
               <dt>입력 → 출력</dt><dd>event + usage + current-turn writes + handoff lint → host별 pass 또는 block</dd>
@@ -826,14 +826,14 @@
               <h4>동작</h4><p>Stop은 마지막 assistant usage와 context window를 읽습니다. Claude/Codex PreCompact는 usage 없이도 실행하며, 성공한 현재-turn Write의 경로·구조 lint를 확인한 뒤 session marker를 기록합니다. Stop은 후속 작업을 요청하고 PreCompact는 압축 자체를 중단하도록 event 의미로 결과를 나눕니다.</p>
               <h4>구조적 비용</h4><p>watermark 181줄 + handoff state 90줄. Claude/Codex는 공통 manifest를 사용하고 별도 host serializer는 두지 않습니다. watermark 테스트 349줄.</p>
               <h4>제거 전 질문</h4><p>최근 30개 긴 작업에서 block 발생 횟수, handoff 후 재질문 감소, 잘못된 임계 차단 횟수는 얼마인가?</p>
-              <h4>Evidence</h4><div class="evidence"><a href="../hooks/context_watermark.py">hooks/context_watermark.py</a><a href="../hooks/handoff_state.py">hooks/handoff_state.py</a><a href="../.codex/hooks.json">.codex/hooks.json</a><a href="../README.md">README.md:127-143</a></div>
+              <h4>Evidence</h4><div class="evidence"><a href="../hooks/context_watermark.py">hooks/context_watermark.py</a><a href="../hooks/handoff_state.py">hooks/handoff_state.py</a><a href="../README.md">README.md opt-in example</a></div>
             </div></details>
           </article>
 
           <article class="feature-card" data-feature="handoff-reinject" data-decision="insufficient-evidence" data-stage="evolution">
             <div class="feature-top"><div><p class="feature-id">F-07 · handoff-reinject</p><h3>compaction 후 handoff 재주입</h3></div><span class="badge insufficient-evidence">근거 부족</span></div>
-            <p class="summary">SessionStart(compact)에서 session-bound handoff를 찾아 최대 8천 자까지 모델 컨텍스트에 다시 넣습니다.</p>
-            <div class="meta-row"><span class="meta">owner: handoff-reinject</span><span class="meta">SessionStart</span><span class="meta">24h freshness</span><span class="meta">8k cap</span><span class="meta">91 LOC</span></div>
+            <p class="summary">Opt-in SessionStart(compact)에서 session-bound handoff를 찾아 최대 8천 자까지 모델 컨텍스트에 다시 넣습니다.</p>
+            <div class="meta-row"><span class="meta">owner: handoff-reinject</span><span class="meta">opt-in SessionStart</span><span class="meta">24h freshness</span><span class="meta">8k cap</span><span class="meta">91 LOC</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>compaction summary가 놓친 사용자 정정과 결정이 다음 실행에 복구된다.</dd>
               <dt>입력 → 출력</dt><dd>session marker + fresh handoff → injected context text</dd>
