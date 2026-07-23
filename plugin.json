@@ -1,4 +1,4 @@
 {
   "name": "agent-gate",
-  "description": "Deterministic enforcement for coding agents: verify required skills, preserve handoffs, gate source edits on readiness, and enforce reviewed cross-language scenarios. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
+  "description": "Structural design and executable completion checks for coding agents, with bundled handoff and skill-verification support. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
 }

@@ -11,6 +11,11 @@ in `.claude/skill-rules.json` are shared; each host reads its own manifest.
 
 Requires `python3` on PATH. Hooks are stdlib-only.
 
+The core product is the structural Design Gate plus executable Completion
+validation. The verifier, watermark, and handoff reinjection are bundled
+lifecycle support and are **default-enabled** by the current plugin manifests;
+they do not participate in either gate's verdict.
+
 ## Claude Code
 
 ```
@@ -52,7 +57,9 @@ staging location is fixed, so no plugin-root variable is needed.
 ### Antigravity coverage (by design, not omission)
 - Design Gate (PreToolUse) and verifier (Stop) — supported via the
   `antigravity_adapter.py` shim (`write_to_file`→`Write`, `IsSkillFile`→skill).
-- Completion Gate is an explicit host-neutral CLI/CI command, not a lifecycle hook.
+- Completion is an explicit host-neutral local completion CLI command, not a
+  lifecycle hook. CI enforcement exists only when task artifacts are available
+  and the command is separately wired by the downstream project.
 - reinject — supported via `PreInvocation` + `injectSteps` on each `CHECKPOINT`
   (compaction).
 - watermark — **unsupported**: the Antigravity CLI records no token/usage in
@@ -64,7 +71,7 @@ staging location is fixed, so no plugin-root variable is needed.
 | Capability | Claude Code | Codex CLI | Antigravity |
 |------------|-------------|-----------|-------------|
 | Pre-edit Design Gate | native hook | native hook | adapter |
-| Explicit Completion CLI/CI | supported | supported | supported |
+| Explicit local Completion CLI | supported | supported | supported |
 | Stop verifier gate | native hook | native hook | adapter |
 | Token watermark at Stop | supported | supported | unsupported (no deterministic usage source) |
 | PreCompact handoff barrier | native hook | native hook | unavailable |
@@ -104,6 +111,17 @@ task, flow, and scenario artifacts. Completion is checked explicitly with
 the active task only after a fresh 100 percent result. No semantic readiness
 score, session binding, child inheritance, PostToolUse binding, or global
 Completion Stop hook participates.
+
+Design Gate observes supported direct-edit events from each host. It is not a
+filesystem security sandbox. `_workspace/**`, `.md`, `.rst`, `.txt`, and named
+project documents are exempt so task recovery and ordinary documentation do
+not require an active design; behavior-bearing Markdown is exempt as well.
+Completion freshness covers the whole worktree except `_workspace/**`, so an
+unrelated worktree change can make an otherwise passing result stale.
+
+This repository's GitHub workflow tests agent-gate itself; it does not enforce
+a task Completion result. Downstream CI must provide the task artifacts and
+separately wire the Completion command.
 
 ## Bundled skills
 

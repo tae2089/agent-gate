@@ -6,7 +6,7 @@
     {
       "name": "agent-gate",
       "source": ".",
-      "description": "Deterministic hook-based enforcement layer for coding agents (Design Gate, Completion Gate, verifier, watermark, reinject)."
+      "description": "Structural design and executable completion checks for coding agents, with bundled handoff and skill-verification support."
     }
   ]
 }
