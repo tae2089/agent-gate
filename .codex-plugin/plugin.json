@@ -1,7 +1,7 @@
 {
   "name": "agent-gate",
-  "version": "0.1.1",
-  "description": "Structural design and executable completion checks for coding agents, with bundled handoff and skill-verification support.",
+  "version": "0.2.0",
+  "description": "Structural design and executable completion gates with an optional evidence-driven evolutionary loop and lifecycle support.",
   "skills": "./.agents/skills/",
   "hooks": "./hooks/hooks.json"
 }
