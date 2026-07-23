@@ -37,7 +37,7 @@ class Check:
 
 
 FILE_PATH_PATTERN = r"[\w./-]+\.(md|py|go|ts|tsx|java|kt|json|yaml|yml|sh|toml)\b"
-# Stable acceptance-criterion id; shared with scripts/readiness_gate.py.
+# Stable acceptance-criterion id used by task structural lint.
 AC_ID_PATTERN = r"\bAC-\d+\b"
 
 # Full-tier design artifacts must be real fenced blocks, not prose that merely

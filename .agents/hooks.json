@@ -12,18 +12,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/antigravity_adapter.py\" --event pretooluse -- python3 \"$r/hooks/readiness_gate_hook.py\" --mode pre"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/antigravity_adapter.py\" --event posttooluse -- python3 \"$r/hooks/readiness_gate_hook.py\" --mode bind"
+            "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/antigravity_adapter.py\" --event pretooluse -- python3 \"$r/hooks/design_gate_hook.py\""
           }
         ]
       }
@@ -32,10 +21,6 @@
       {
         "type": "command",
         "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/antigravity_adapter.py\" --event stop -- python3 \"$r/hooks/skill_invocation_verifier.py\" --rules \"$r/.claude/skill-rules.json\""
-      },
-      {
-        "type": "command",
-        "command": "r=$(git rev-parse --show-toplevel); python3 \"$r/hooks/antigravity_adapter.py\" --event stop -- python3 \"$r/hooks/scenario_gate_hook.py\""
       }
     ]
   }

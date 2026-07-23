@@ -45,24 +45,19 @@ class TestHookConfig(unittest.TestCase):
             self.assertNotIn("/Users/", command)
             self.assertIn("$(git rev-parse --show-toplevel)", command)
 
-    def test_claude_wires_readiness_precheck_and_post_bind(self):
+    def test_claude_wires_design_precheck_without_post_bind(self):
         config = self.load(".claude/settings.json")
         pre = config["hooks"]["PreToolUse"]
-        post = config["hooks"]["PostToolUse"]
         self.assertEqual(pre[0]["matcher"], "Write|Edit|apply_patch")
-        self.assertEqual(post[0]["matcher"], "Write|Edit|apply_patch")
-        self.assertEqual(pre[0]["hooks"][0]["args"][-2:], ["--mode", "pre"])
-        self.assertEqual(post[0]["hooks"][0]["args"][-2:], ["--mode", "bind"])
+        self.assertIn("design_gate_hook.py", pre[0]["hooks"][0]["args"][-1])
+        self.assertNotIn("PostToolUse", config["hooks"])
 
-    def test_codex_wires_readiness_precheck_and_post_bind(self):
+    def test_codex_wires_design_precheck_without_post_bind(self):
         config = self.load(".codex/hooks.json")
         pre = config["hooks"]["PreToolUse"]
-        post = config["hooks"]["PostToolUse"]
         self.assertEqual(pre[0]["matcher"], "Write|Edit|apply_patch")
-        self.assertEqual(post[0]["matcher"], "Write|Edit|apply_patch")
-        self.assertIn("readiness_gate_hook.py", pre[0]["hooks"][0]["command"])
-        self.assertIn("--mode pre", pre[0]["hooks"][0]["command"])
-        self.assertIn("--mode bind", post[0]["hooks"][0]["command"])
+        self.assertIn("design_gate_hook.py", pre[0]["hooks"][0]["command"])
+        self.assertNotIn("PostToolUse", config["hooks"])
 
     def test_codex_project_wires_watermark_before_manual_and_auto_compaction(self):
         config = self.load(".codex/hooks.json")
@@ -72,14 +67,21 @@ class TestHookConfig(unittest.TestCase):
         commands = [hook["command"] for hook in groups[0]["hooks"]]
         self.assertTrue(any("context_watermark.py" in command for command in commands))
 
-    def test_codex_plugin_packages_precompact_watermark_hook(self):
-        manifest = self.load(".codex-plugin/plugin.json")
-        hook_paths = manifest["hooks"]
+    def test_claude_project_wires_watermark_before_manual_and_auto_compaction(self):
+        config = self.load(".claude/settings.json")
+        groups = config["hooks"]["PreCompact"]
 
-        self.assertIsInstance(hook_paths, list)
-        self.assertIn("./hooks/hooks.json", hook_paths)
-        self.assertIn("./hooks/codex-hooks.json", hook_paths)
-        config = self.load("hooks/codex-hooks.json")
+        self.assertEqual(groups[0]["matcher"], "manual|auto")
+        commands = [
+            hook["command"] + " " + " ".join(hook.get("args", []))
+            for hook in groups[0]["hooks"]
+        ]
+        self.assertTrue(any("context_watermark.py" in command for command in commands))
+
+    def test_shared_plugin_packages_precompact_watermark_hook(self):
+        manifest = self.load(".codex-plugin/plugin.json")
+        self.assertEqual(manifest["hooks"], "./hooks/hooks.json")
+        config = self.load("hooks/hooks.json")
         groups = config["hooks"]["PreCompact"]
         self.assertEqual(groups[0]["matcher"], "manual|auto")
         self.assertIn("context_watermark.py", groups[0]["hooks"][0]["command"])
@@ -94,9 +96,9 @@ class TestHookConfig(unittest.TestCase):
         for relative in ("hooks.json", ".agents/hooks.json"):
             with self.subTest(relative=relative):
                 hooks = self.load(relative)["agent-gate"]
-                for event in ("PreToolUse", "PostToolUse"):
-                    matcher = hooks[event][0]["matcher"]
-                    self.assertEqual(set(matcher.split("|")), ANTIGRAVITY_MUTATORS)
+                matcher = hooks["PreToolUse"][0]["matcher"]
+                self.assertEqual(set(matcher.split("|")), ANTIGRAVITY_MUTATORS)
+                self.assertNotIn("PostToolUse", hooks)
 
     def test_implementation_edits_are_not_gated_by_skill_invocation(self):
         rules = self.load(".claude/skill-rules.json")["rules"]
@@ -105,7 +107,7 @@ class TestHookConfig(unittest.TestCase):
                    and "input_pattern" in rule.get("when", {})]
         self.assertEqual(matches, [])
 
-    def test_all_hosts_wire_scenario_completion_stop_hook(self):
+    def test_no_host_wires_global_completion_stop_hook(self):
         claude_files = ("hooks/hooks.json", ".claude/settings.json")
         for relative in claude_files:
             with self.subTest(relative=relative):
@@ -114,17 +116,21 @@ class TestHookConfig(unittest.TestCase):
                     for group in self.load(relative)["hooks"]["Stop"]
                     for hook in group.get("hooks", [])
                 ]
-                self.assertTrue(any("scenario_gate_hook.py" in command for command in commands))
+                self.assertFalse(any("completion_gate_hook.py" in command for command in commands))
 
         codex = self.load(".codex/hooks.json")["hooks"]["Stop"]
         codex_commands = [
             hook["command"] for group in codex for hook in group.get("hooks", [])
         ]
-        self.assertTrue(any("scenario_gate_hook.py" in command for command in codex_commands))
+        self.assertFalse(any("completion_gate_hook.py" in command for command in codex_commands))
 
         for relative in ("hooks.json", ".agents/hooks.json"):
             commands = [item["command"] for item in self.load(relative)["agent-gate"]["Stop"]]
-            self.assertTrue(any("scenario_gate_hook.py" in command for command in commands))
+            self.assertFalse(any("completion_gate_hook.py" in command for command in commands))
+        self.assertFalse((ROOT / "hooks" / "completion_gate_hook.py").exists())
+
+    def test_legacy_readiness_hook_alias_is_removed(self):
+        self.assertFalse((ROOT / "hooks" / "readiness_gate_hook.py").exists())
 
 
 if __name__ == "__main__":

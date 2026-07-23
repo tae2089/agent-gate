@@ -732,7 +732,7 @@
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>필수 구조가 없는 빈 산출물이 비싼 의미 평가로 넘어가지 않는다.</dd>
               <dt>입력 → 출력</dt><dd>Markdown artifact → 점수, floor failures, exit code</dd>
-              <dt>겹침</dt><dd>readiness와 watermark가 별도 구현 없이 같은 lint 함수를 재사용한다.</dd>
+              <dt>겹침</dt><dd>Design Gate와 watermark가 별도 구현 없이 같은 lint 함수를 재사용한다.</dd>
               <dt>한계</dt><dd>내용의 진실성이나 구현 가능성은 판정하지 못한다.</dd>
               <dt>검토 결론</dt><dd>싸고 공유되는 기반. 새 검사 항목을 늘릴 때만 Goodhart 위험 검토.</dd>
               <dt>더 작은 대안</dt><dd>현재 단일 stdlib validator를 여러 gate가 공유하므로 다른 구조는 더 작지 않다.</dd>
@@ -748,83 +748,83 @@
 
           <article class="feature-card" data-feature="artifact-judge" data-decision="insufficient-evidence" data-stage="seed evaluate">
             <div class="feature-top"><div><p class="feature-id">F-03 · artifact-judge</p><h3>독립 LLM 의미 평가</h3></div><span class="badge insufficient-evidence">근거 부족</span></div>
-            <p class="summary">구조 lint를 통과한 task/implementation readiness와 요청된 일반 산출물 품질을 독립 컨텍스트에서 판정합니다.</p>
-            <div class="meta-row"><span class="meta">owner: artifact-judge skill</span><span class="meta">Skill</span><span class="meta">LLM cost</span><span class="meta">hash-bound</span><span class="meta">independent context</span></div>
+            <p class="summary">사용자가 요청한 산출물의 의미 품질을 독립 컨텍스트에서 선택적으로 판정합니다. 편집 또는 완료 권한에는 참여하지 않습니다.</p>
+            <div class="meta-row"><span class="meta">owner: artifact-judge skill</span><span class="meta">optional</span><span class="meta">LLM cost</span><span class="meta">independent context</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>형식은 맞지만 의미가 비어 있거나 자기정당화된 산출물을 그대로 신뢰하지 않는다.</dd>
-              <dt>입력 → 출력</dt><dd>artifact + rubric/template → assessment 또는 품질 verdict</dd>
+              <dt>입력 → 출력</dt><dd>artifact + source material + rubric → 품질 verdict</dd>
               <dt>겹침</dt><dd>artifact-lint가 구조 부재를 먼저 차단하고 judge는 의미 평가만 담당한다.</dd>
               <dt>한계</dt><dd>모델 편향·오탐·토큰 비용이 있으며 실제 코드 정확도를 직접 증명하지 않는다.</dd>
               <dt>검토 결론</dt><dd>실제 차단 결함/오탐 기록이 없으면 rubric 차원 또는 호출 횟수 축소 검토.</dd>
-              <dt>더 작은 대안</dt><dd>형식·해시·AC 추적은 Python에 두고 실제 의미 판단 차원만 LLM에 요청한다.</dd>
+              <dt>더 작은 대안</dt><dd>일반 작업에서는 호출하지 않고 중요 산출물 평가 요청에만 사용한다.</dd>
               <dt>삭제 조건</dt><dd>with/without 비교에서 결함 차단 이득 없이 토큰·오탐만 증가할 때.</dd>
             </dl>
             <details><summary>동작·비용·근거 보기</summary><div class="detail-body">
-              <h4>동작</h4><p>1층 lint 이후에만 호출하고, 판정 evidence가 원문 substring인지 deterministic validator가 확인합니다. 중요한 generic artifact는 median-of-3을 권고합니다.</p>
-              <h4>구조적 비용</h4><p>코드보다 skill·rubric·assessment schema의 정책 유지 비용이 큽니다. task/flow 변경 시 readiness 재판정 토큰이 듭니다.</p>
+              <h4>동작</h4><p>1층 lint 이후에만 호출하고, 판정 evidence가 원문 substring인지 확인합니다. 중요한 산출물은 median-of-3을 권고합니다.</p>
+              <h4>구조적 비용</h4><p>코드가 아니라 작은 skill·rubric 정책과 요청 시 모델 호출 비용입니다.</p>
               <h4>제거 전 질문</h4><p>최근 20개 판정 중 실제 누락을 잡은 비율, 인간이 뒤집은 비율, 평균 호출 횟수는 얼마인가?</p>
-              <h4>Evidence</h4><div class="evidence"><a href="../.claude/skills/artifact-judge/SKILL.md">.claude/skills/artifact-judge/SKILL.md</a><a href="readiness-assessment.md">docs/readiness-assessment.md:1-108</a></div>
+              <h4>Evidence</h4><div class="evidence"><a href="../.claude/skills/artifact-judge/SKILL.md">.claude/skills/artifact-judge/SKILL.md</a><a href="rubric-judge.md">docs/rubric-judge.md</a></div>
             </div></details>
           </article>
 
-          <article class="feature-card" data-feature="readiness-gate" data-decision="required" data-stage="seed execute">
-            <div class="feature-top"><div><p class="feature-id">F-04 · readiness-gate</p><h3>설계 proof 없는 코드 편집 차단</h3></div><span class="badge required">필수</span></div>
-            <p class="summary">Full task의 명확성·구현 준비도 또는 Full 부모를 상속한 child proof를 session에 bind하고 보호 파일 편집 전에 재검증합니다.</p>
-            <div class="meta-row"><span class="meta">owner: readiness</span><span class="meta">Pre/PostToolUse</span><span class="meta">hash freshness</span><span class="meta">child inheritance</span><span class="meta">~900 LOC</span></div>
+          <article class="feature-card" data-feature="design-gate" data-decision="required" data-stage="seed execute">
+            <div class="feature-top"><div><p class="feature-id">F-04 · Design Gate</p><h3>설계 구조 없는 코드 편집 차단</h3></div><span class="badge required">필수</span></div>
+            <p class="summary">한 worktree의 active task에 task·번호형 flow·실행 시나리오가 구조적으로 존재할 때만 보호 파일 편집을 허용합니다.</p>
+            <div class="meta-row"><span class="meta">owner: design-gate</span><span class="meta">PreToolUse</span><span class="meta">structural</span><span class="meta">no LLM</span><span class="meta">no session binding</span></div>
             <dl class="audit-table">
-              <dt>보호 불변식</dt><dd>작업을 작게 나눠도 부모의 P/AC 흐름 없이 독립 Fast로 구현하지 않는다.</dd>
-              <dt>입력 → 출력</dt><dd>task/implementation/assessment 또는 child manifest → READY + session binding</dd>
-              <dt>겹침</dt><dd>artifact-lint 구조 검사와 artifact-judge 의미 점수를 조합한다.</dd>
-              <dt>한계</dt><dd>직접 Write/Edit/apply_patch만 보호하며 shell 간접 쓰기는 보장하지 않는다.</dd>
-              <dt>검토 결론</dt><dd>사용자가 반복 관찰한 Fast 우회 문제의 핵심 해법. 점수 차원은 별도 축소 가능.</dd>
-              <dt>더 작은 대안</dt><dd>Full 부모 하나만 평가하고 child는 직접 부모의 P/AC를 참조한다. child별 재평가는 추가하지 않는다.</dd>
-              <dt>삭제 조건</dt><dd>작업 분해 후 설계 누락이 재현되지 않고 scenario gate만으로 구현 전 오류 비용도 충분히 낮출 때.</dd>
+              <dt>보호 불변식</dt><dd>task·flow·scenario가 구조적으로 존재하지 않으면 구현을 시작하지 않는다.</dd>
+              <dt>입력 → 출력</dt><dd>active task pointer + 세 설계 artifact → protected edit allow/block</dd>
+              <dt>겹침</dt><dd>artifact-lint와 Completion Gate의 scenario parser를 재사용한다.</dd>
+              <dt>한계</dt><dd>직접 Write/Edit/apply_patch만 보호하고 한 worktree에서 active task 하나만 지원한다.</dd>
+              <dt>검토 결론</dt><dd>semantic readiness·session marker·상속 없이 구조 부재만 싸게 차단하는 최소안.</dd>
+              <dt>더 작은 대안</dt><dd>PreToolUse를 없애면 설계 없이 구현 못 한다는 핵심 불변식이 사라진다.</dd>
+              <dt>삭제 조건</dt><dd>구현 전 설계 강제를 제품 목표에서 제거할 때.</dd>
             </dl>
             <details><summary>동작·비용·근거 보기</summary><div class="detail-body">
-              <h4>동작</h4><p>Full은 assessment hash·evidence·floor·AC coverage를 재계산합니다. Child는 직접 Full 부모의 flow_refs/acceptance_refs를 상속하고 부모 변경 시 stale 처리됩니다.</p>
-              <h4>구조적 비용</h4><p>validator 552줄 + hook 270줄 + state 78줄, 관련 테스트 647줄. marker 저장은 session_marker를 공유합니다.</p>
-              <h4>제거 전 질문</h4><p>핵심 binding을 유지한 채 7개 LLM 점수 차원을 더 단순한 pass/revise checklist로 바꿀 수 있는가?</p>
-              <h4>Evidence</h4><div class="evidence"><a href="../scripts/readiness_gate.py">scripts/readiness_gate.py</a><a href="../hooks/readiness_gate_hook.py">hooks/readiness_gate_hook.py</a><a href="readiness-assessment.md">docs/readiness-assessment.md:24-39</a></div>
+              <h4>동작</h4><p>명시적 activation이 `_workspace/.active-task`를 기록하고 PreToolUse가 매 보호 편집에서 task lint, flow lint, strict scenario contract를 검사합니다.</p>
+              <h4>구조적 비용</h4><p>얇은 PreToolUse adapter와 Completion Gate가 공유하는 구조 validator입니다. PostToolUse hook과 readiness state는 없습니다.</p>
+              <h4>제거 전 질문</h4><p>구조 차단이 실제 설계 누락을 막지 못한다면 hook 대신 명시적 CLI만 남길 수 있는가?</p>
+              <h4>Evidence</h4><div class="evidence"><a href="../scripts/scenario_gate.py">scripts/scenario_gate.py</a><a href="../hooks/design_gate_hook.py">hooks/design_gate_hook.py</a><a href="../README.md">README.md</a></div>
             </div></details>
           </article>
 
-          <article class="feature-card" data-feature="scenario-gate" data-decision="required" data-stage="seed evaluate evolution">
-            <div class="feature-top"><div><p class="feature-id">F-05 · scenario-gate</p><h3>관찰 가능한 시나리오 완료 판정</h3></div><span class="badge required">필수</span></div>
-            <p class="summary">AC/P에서 만든 각 시나리오를 전용 executable check에 연결하고, 모든 최신 실행이 통과해 시나리오 추적 완성도 100%일 때만 Stop 또는 CI 완료를 허용합니다.</p>
-            <div class="meta-row"><span class="meta">owner: scenario-gate</span><span class="meta">opt-in</span><span class="meta">Stop / CI</span><span class="meta">single enforce</span><span class="meta">939 LOC + hook</span></div>
+          <article class="feature-card" data-feature="completion-gate" data-decision="required" data-stage="seed evaluate evolution">
+            <div class="feature-top"><div><p class="feature-id">F-05 · Completion Gate</p><h3>최신 시나리오 100% 완료 판정</h3></div><span class="badge required">필수</span></div>
+            <p class="summary">각 시나리오의 direct argv를 실행하고 모든 최신 결과가 통과해 추적 완성도 100%일 때만 명시적 CLI 또는 CI 완료를 허용합니다.</p>
+            <div class="meta-row"><span class="meta">owner: completion-gate</span><span class="meta">CLI / CI</span><span class="meta">explicit finish</span><span class="meta">no LLM</span></div>
             <dl class="audit-table">
-              <dt>보호 불변식</dt><dd>각 필수 시나리오에 공유되지 않는 check가 있고 현재 task·flow·contract·source·config에서 모두 통과했다.</dd>
-              <dt>입력 → 출력</dt><dd>contract + exclusive checks → result + 추적 완성도 + completion verdict</dd>
-              <dt>겹침</dt><dd>readiness의 AC/P 원문을 참조하지만 완료 판정 권위는 runner 결과 하나로 제한한다.</dd>
-              <dt>한계</dt><dd>잘못 작성된 시나리오 검사의 의미는 증명하지 못하며 OS network sandbox가 없다.</dd>
-              <dt>검토 결론</dt><dd>Runner가 실행과 완료 판정 권위를 가지며 추적 완성도는 통과한 필수 scenario 비율로 계산한다.</dd>
-              <dt>더 작은 대안</dt><dd>현재 단일 fail-closed 정책과 direct Full 부모 경계가 최소안이다. mode·overlay·runner review는 다시 넣지 않는다.</dd>
+              <dt>보호 불변식</dt><dd>선언한 모든 시나리오가 현재 task·flow·contract·source에서 통과했다.</dd>
+              <dt>입력 → 출력</dt><dd>scenario contract + argv checks → result + 추적 완성도 + completion verdict</dd>
+              <dt>겹침</dt><dd>Design Gate와 같은 active task·contract를 사용하지만 완료 권위는 실행 결과뿐이다.</dd>
+              <dt>한계</dt><dd>잘못 작성된 시나리오 검사의 의미는 증명하지 못하며 OS network sandbox가 없다. 일반 대화 Stop은 완료 경계가 아니다.</dd>
+              <dt>검토 결론</dt><dd>실행 결과가 완료 판정 권위를 가지며 추적 완성도는 통과한 scenario 비율로 계산한다.</dd>
+              <dt>더 작은 대안</dt><dd>단일 테스트 명령만 검사하면 선언한 scenario별 실행 여부를 보장하지 못한다.</dd>
               <dt>삭제 조건</dt><dd>관찰 가능한 완료 판정이라는 프로젝트 목적을 폐기할 때뿐이다.</dd>
             </dl>
             <details open><summary>동작·비용·근거 보기</summary><div class="detail-body">
-              <h4>동작</h4><ul><li>관찰 가능한 Then 기대값을 가진 시나리오 contract</li><li>자식도 직접 Full 부모의 contract/result 사용</li><li>scenario마다 exclusive runner를 한 번 실행하고 결과 atomic write</li><li>task·flow·contract·source·runner config별 freshness 검증</li></ul>
-              <h4>구조적 비용</h4><p>의미 evidence schema·위치 validator·judge 절차를 제거했습니다. 남은 비용은 core 939줄 + Stop hook 75줄과 contract 검증, runner 격리, freshness 테스트입니다.</p>
+              <h4>동작</h4><ul><li>관찰 가능한 Given/When/Then과 direct command를 가진 strict contract</li><li>scenario마다 argv를 한 번 실행하고 결과 atomic write</li><li>task·flow·contract·source별 freshness 검증</li><li>stale과 저장된 pass 비율을 분리</li><li>최신 100%의 explicit finish만 active task 해제</li></ul>
+              <h4>구조적 비용</h4><p>Design/Completion 공통 core와 runner 격리·freshness 테스트입니다. 별도 Stop adapter, runner registry, 상속 상태는 없습니다.</p>
               <h4>다음 검토 질문</h4><p>시나리오 검사가 잘못된 구현에서도 통과한 사례가 있는가? 숨겨진 테스트·과거 결함·mutation으로 contract/test 품질을 별도 감사해야 합니다.</p>
-              <h4>Evidence</h4><div class="evidence"><a href="../scripts/scenario_gate.py">scripts/scenario_gate.py</a><a href="../hooks/scenario_gate_hook.py">hooks/scenario_gate_hook.py</a><a href="../README.md">README.md:81-119</a></div>
+              <h4>Evidence</h4><div class="evidence"><a href="../scripts/scenario_gate.py">scripts/scenario_gate.py</a><a href="../README.md">README.md</a></div>
             </div></details>
           </article>
 
           <article class="feature-card" data-feature="context-watermark" data-decision="insufficient-evidence" data-stage="evolution">
             <div class="feature-top"><div><p class="feature-id">F-06 · context-watermark</p><h3>컨텍스트 소진 전 handoff 강제</h3></div><span class="badge insufficient-evidence">근거 부족</span></div>
-            <p class="summary">Stop에서 실제 token usage가 80%를 넘으면 handoff를 요구하고, Codex PreCompact에서는 usage와 무관하게 압축 직전 유효한 handoff를 최종 확인합니다.</p>
-            <div class="meta-row"><span class="meta">owner: context-watermark</span><span class="meta">Stop + PreCompact</span><span class="meta">80% default</span><span class="meta">181 LOC</span><span class="meta">Codex contract</span></div>
+            <p class="summary">Stop에서 실제 token usage가 80%를 넘으면 handoff를 요구하고, Claude/Codex PreCompact에서는 usage와 무관하게 압축 직전 유효한 handoff를 최종 확인합니다.</p>
+            <div class="meta-row"><span class="meta">owner: context-watermark</span><span class="meta">Stop + PreCompact</span><span class="meta">80% default</span><span class="meta">181 LOC</span><span class="meta">event semantics</span></div>
             <dl class="audit-table">
               <dt>보호 불변식</dt><dd>compaction 전에 목표·결정·검증 상태가 파일로 대피된다.</dd>
               <dt>입력 → 출력</dt><dd>event + usage + current-turn writes + handoff lint → host별 pass 또는 block</dd>
               <dt>겹침</dt><dd>handoff-reinject가 저장된 handoff를 다음 컨텍스트에 다시 넣는다.</dd>
-              <dt>한계</dt><dd>Codex PreCompact는 usage 없이도 동작하지만 Antigravity watermark에는 연결되지 않는다. 변경된 hook은 host에서 다시 신뢰해야 한다.</dd>
+              <dt>한계</dt><dd>Claude/Codex PreCompact는 usage 없이도 동작하지만 Antigravity에는 결정론적 usage source와 PreCompact event가 없다. 변경된 hook은 host에서 다시 신뢰해야 한다.</dd>
               <dt>검토 결론</dt><dd>handoff가 실제로 몇 번 강제되고 유용했는지 측정 후 reinject와 세트로 판단.</dd>
               <dt>더 작은 대안</dt><dd>모든 지원 host가 신뢰할 수 있는 PreCompact를 제공하면 80% token watermark를 제거하고 압축 경계 하나로 통합한다.</dd>
               <dt>삭제 조건</dt><dd>강제 handoff가 재개 오류를 줄이지 않거나 native summary만으로 같은 결과가 날 때.</dd>
             </dl>
             <details><summary>동작·비용·근거 보기</summary><div class="detail-body">
-              <h4>동작</h4><p>Stop은 마지막 assistant usage와 context window를 읽습니다. Codex PreCompact는 usage 없이도 실행하며, 성공한 현재-turn Write의 경로·구조 lint를 확인한 뒤 session marker를 기록합니다. 차단 결과는 Claude와 Codex 형식으로 분리합니다.</p>
-              <h4>구조적 비용</h4><p>watermark 181줄 + handoff state 90줄 + Codex PreCompact manifest 15줄. watermark 테스트 349줄.</p>
+              <h4>동작</h4><p>Stop은 마지막 assistant usage와 context window를 읽습니다. Claude/Codex PreCompact는 usage 없이도 실행하며, 성공한 현재-turn Write의 경로·구조 lint를 확인한 뒤 session marker를 기록합니다. Stop은 후속 작업을 요청하고 PreCompact는 압축 자체를 중단하도록 event 의미로 결과를 나눕니다.</p>
+              <h4>구조적 비용</h4><p>watermark 181줄 + handoff state 90줄. Claude/Codex는 공통 manifest를 사용하고 별도 host serializer는 두지 않습니다. watermark 테스트 349줄.</p>
               <h4>제거 전 질문</h4><p>최근 30개 긴 작업에서 block 발생 횟수, handoff 후 재질문 감소, 잘못된 임계 차단 횟수는 얼마인가?</p>
               <h4>Evidence</h4><div class="evidence"><a href="../hooks/context_watermark.py">hooks/context_watermark.py</a><a href="../hooks/handoff_state.py">hooks/handoff_state.py</a><a href="../.codex/hooks.json">.codex/hooks.json</a><a href="../README.md">README.md:127-143</a></div>
             </div></details>
@@ -880,7 +880,7 @@
               <dt>보호 불변식</dt><dd>같은 정책이 사용하는 agent host에 따라 다른 결과를 내지 않는다.</dd>
               <dt>입력 → 출력</dt><dd>host-specific event/transcript → shared Claude-shaped contract</dd>
               <dt>겹침</dt><dd>각 host가 native hook을 제공하므로 일부 변환은 향후 불필요해질 수 있다.</dd>
-              <dt>한계</dt><dd>Antigravity watermark 미지원, adapter fail-open, 설치 경로 차이로 완전 동등하지 않다.</dd>
+              <dt>한계</dt><dd>Antigravity watermark 미지원, adapter fail-open, 설치 경로 차이로 완전 동등하지 않다. 기본 contract test는 설치된 Claude/Codex가 lifecycle verdict를 실제 소비하는지 보장하지 않는다.</dd>
               <dt>검토 결론</dt><dd>실사용 host만 남기는 것이 가장 큰 단순화. 배포 대상 확인 전에는 삭제 근거 부족.</dd>
               <dt>더 작은 대안</dt><dd>실제 사용하는 host manifest와 normalization 경로만 남기고 나머지 adapter·테스트를 삭제한다.</dd>
               <dt>삭제 조건</dt><dd>최근 운영 또는 배포 대상에서 특정 host 사용 사례가 없다고 확인될 때 host 단위로 제거.</dd>
@@ -889,7 +889,7 @@
               <h4>동작</h4><p>Claude/Codex는 공통 hooks manifest를 쓰고, Antigravity는 command verdict와 tool 이름을 adapter에서 변환합니다. transcript.py가 Codex/Antigravity 기록을 정규화합니다.</p>
               <h4>구조적 비용</h4><p>adapter 229줄 + transcript normalization 322줄 중 상당 부분, host 관련 테스트 629줄 이상.</p>
               <h4>제거 전 질문</h4><p>최근 사용한 host는 무엇인가? 배포하지 않는 host를 문서상 지원하기 위해 계속 테스트할 필요가 있는가?</p>
-              <h4>Evidence</h4><div class="evidence"><a href="../PLUGIN.md">PLUGIN.md:1-57</a><a href="../hooks/antigravity_adapter.py">hooks/antigravity_adapter.py</a><a href="../hooks/transcript.py">hooks/transcript.py</a><a href="../.agents/hooks.json">.agents/hooks.json</a></div>
+              <h4>Evidence</h4><div class="evidence"><a href="../PLUGIN.md">PLUGIN.md</a><a href="../hooks/antigravity_adapter.py">hooks/antigravity_adapter.py</a><a href="../hooks/transcript.py">hooks/transcript.py</a><a href="../.agents/hooks.json">.agents/hooks.json</a></div>
             </div></details>
           </article>
 
@@ -906,11 +906,11 @@
         <ul class="history-grid">
           <li class="history-item" data-history="prompt-router"><span class="history-kind">removed</span><strong>prompt-router</strong><p>모델의 기본 skill 선택과 Stop verifier 사이에서 같은 정책을 한 번 더 알렸지만 재작업 감소 근거가 없어 제거했습니다.</p></li>
           <li class="history-item" data-history="scenario-rollout-modes"><span class="history-kind">removed</span><strong>scenario rollout modes</strong><p>advisory·critical·enforce 분기를 없애고 opt-in이면 하나의 fail-closed 정책만 사용합니다.</p></li>
-          <li class="history-item" data-history="child-overlay-parent-candidate"><span class="history-kind">removed</span><strong>child overlay · parent-candidate</strong><p>Child가 별도 시나리오 상태를 소유하지 않고 direct Full 부모의 완료 경계를 그대로 사용합니다.</p></li>
-          <li class="history-item" data-history="runner-review"><span class="history-kind">removed</span><strong>runner review</strong><p>명령 의미를 LLM이 검토하는 우회 보장을 제거했습니다. Runner는 exclusive scenario 실행만 담당합니다.</p></li>
+          <li class="history-item" data-history="child-overlay-parent-candidate"><span class="history-kind">removed</span><strong>child overlay · inheritance · parent-candidate</strong><p>작업마다 직접 task·flow·scenario를 두고 병렬 작업은 별도 worktree로 격리합니다.</p></li>
+          <li class="history-item" data-history="runner-review"><span class="history-kind">removed</span><strong>runner registry · review</strong><p>별도 registry와 LLM 검토를 제거하고 scenario가 shell 없는 argv를 직접 선언합니다.</p></li>
           <li class="history-item" data-history="junit-xml"><span class="history-kind">removed</span><strong>JUnit XML / test-report rule</strong><p>언어별 report parser를 skill verifier에서 제거하고 실제 scenario command의 exit code와 evidence를 사용합니다.</p></li>
           <li class="history-item" data-history="stage1-autorun"><span class="history-kind">not adopted</span><strong>stage1-autorun</strong><p>편집마다 전체 검증을 반복하지 않습니다. 완료·CI 경계의 scenario run이 실행 증거를 소유합니다.</p></li>
-          <li class="history-item" data-history="scope-gate"><span class="history-kind">not adopted</span><strong>scope-gate</strong><p>파일 범위 DSL과 child 정책을 만들지 않습니다. Full 부모 P/AC 상속, scenario 완료, diff review로 대응합니다.</p></li>
+          <li class="history-item" data-history="scope-gate"><span class="history-kind">not adopted</span><strong>scope-gate</strong><p>파일 범위 DSL과 child 정책을 만들지 않습니다. active design, scenario 완료, diff review로 대응합니다.</p></li>
         </ul>
       </section>
 
@@ -936,11 +936,10 @@
             <thead><tr><th>Artifact / state</th><th>소유 기능</th><th>의미</th><th>변경 시 영향</th></tr></thead>
             <tbody>
               <tr><td><code>.claude/skill-rules.json</code></td><td>skill-verifier</td><td>독립 의미 판정이 필요한 prompt/tool trigger</td><td>Stop verifier·replay 기대값</td></tr>
-              <tr><td><code>task.md</code> / <code>implementation.md</code></td><td>readiness-gate</td><td>목표·AC·P 흐름의 원문</td><td>assessment·child proof·scenario result stale</td></tr>
-              <tr><td><code>assessment.json</code></td><td>artifact-judge + readiness</td><td>원문 hash에 묶인 독립 의미 점수</td><td>Full 편집 binding 허용 여부</td></tr>
-              <tr><td><code>inherited-readiness.json</code></td><td>readiness-gate</td><td>direct Full 부모와 child P/AC 배정</td><td>child source 편집 binding</td></tr>
-              <tr><td><code>scenario-contract.json</code></td><td>scenario-gate</td><td>관찰 가능한 Given/When/Then 기대 행동</td><td>scenario result hash stale</td></tr>
-              <tr><td><code>scenario-result.json</code></td><td>scenario runner</td><td>현재 task/flow/contract/source/config에 묶인 exclusive check 결과</td><td>추적 완성도·Stop/CI completion 판정</td></tr>
+              <tr><td><code>task.md</code> / <code>implementation.md</code></td><td>Design Gate</td><td>목표·AC·P 흐름의 원문</td><td>구조 편집 허용·scenario result stale</td></tr>
+              <tr><td><code>_workspace/.active-task</code></td><td>Design Gate</td><td>현재 worktree의 단일 active task</td><td>PreToolUse 판정·explicit finish 대상</td></tr>
+              <tr><td><code>scenario-contract.json</code></td><td>Design / Completion Gate</td><td>관찰 가능한 Given/When/Then과 direct argv</td><td>scenario result hash stale</td></tr>
+              <tr><td><code>scenario-result.json</code></td><td>Completion Gate</td><td>현재 task/flow/contract/source에 묶인 scenario별 실행 결과</td><td>추적 완성도·CLI/CI completion 판정</td></tr>
               <tr><td><code>handoff.md</code> + session marker</td><td>watermark / reinject</td><td>compaction 전 작업 상태와 재주입 대상</td><td>다음 compact session context</td></tr>
             </tbody>
           </table>

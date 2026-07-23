@@ -28,18 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/readiness_gate_hook.py\" --mode pre"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|apply_patch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/readiness_gate_hook.py\" --mode bind"
+            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/design_gate_hook.py\""
           }
         ]
       }
@@ -54,10 +43,6 @@
           {
             "type": "command",
             "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/context_watermark.py\""
-          },
-          {
-            "type": "command",
-            "command": "python3 \"$(git rev-parse --show-toplevel)/hooks/scenario_gate_hook.py\""
           }
         ]
       }

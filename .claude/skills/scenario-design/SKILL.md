@@ -1,32 +1,36 @@
 ---
 name: scenario-design
-description: Create or refine a Full parent's observable scenario-contract.json from task acceptance criteria and numbered flow pseudocode, with plain observable expectations and exclusive executable checks.
+description: Create or refine a task's executable scenario-contract.json from its contract and numbered flow, with plain observable expectations and direct argv checks.
 ---
 
 # Scenario Design
 
-Create the smallest executable behavior contract that covers the declared flow. Do not design production code, child-local completion boundaries, or a universal test framework.
+Create the smallest executable behavior contract that covers the declared
+flow. Do not design production code or a universal test framework.
 
 ## Procedure
 
-1. Resolve the direct Full task and `.agent-gate/scenario-gate.json`. If the active task is inherited, use its `parent_task`; the child never owns a scenario contract. Read only the Full task's `task.md` Contract/AC and `implementation.md` Pseudocode. Done when every exact source path is known.
-2. Use the `flow-design` skill if available to close missing branch and side-effect failure arms before extracting scenarios. Do not turn an unhandled arm into intended behavior. Done when every scenario points to an observable terminal.
-3. Build the smallest arm-covering scenario set. Each scenario has one event, 3-5 Given/When/Then steps total where practical, and asserts public output, persisted state, or emitted events rather than functions, mocks, or call order.
-4. Write every Then as a short list of plain observable expectation strings. Each scenario names one configured runner, and no runner name may be shared by another scenario.
-5. Write the strict Full-parent `scenario-contract.json`. When a child discovers a missing behavior, update the parent contract before further implementation; never create `scenario-overlay.json`, ownership, or parent-candidate state.
-6. Run `python3 scripts/scenario_gate.py readiness <full-task-dir> --project-root <root>`. Fix schema, AC/P reference, invalid Then expectation, or exclusive-runner errors. Done when the command exits 0.
-7. After implementation, run `python3 scripts/scenario_gate.py run <active-task-dir> --project-root <root>` and then `completion` with the same arguments. Fix the named failed or stale scenario and rerun. Done when every exclusive scenario check is current, trace completeness is 100%, and completion exits 0.
+1. Resolve one direct `_workspace/<task>` containing `task.md` and
+   `implementation.md`. Read the Contract/AC and numbered Pseudocode.
+2. Use `flow-design` to close missing branch and side-effect failure arms.
+   Never turn an unhandled arm into intended behavior.
+3. Extract the smallest arm-covering scenario set. Each scenario has one
+   event, 3–5 Given/When/Then steps where practical, and asserts a public
+   output, persisted state, or emitted event.
+4. Write every Then as plain observable expectations. Give each scenario one
+   direct non-shell `"command"` argv array.
+5. Write the strict `scenario-contract.json` and run:
 
-## Boundaries
+   ```bash
+   python3 scripts/scenario_gate.py design _workspace/<task> \
+     --project-root . --activate
+   ```
 
-- Do not create one scenario per P line, function, class, or mock interaction.
-- Do not change an expected outcome to match an implementation failure.
-- Do not create child-local scenario artifacts or downgrade a Full completion boundary after decomposition.
-- Do not ask an LLM to judge runner commands. Repository runner configuration is the declared trust boundary.
-- Keep successful runner logs out of model context; inspect only failed execution evidence.
-- Treat scenario review as authoring assistance, not completion authority. A configured executable check and its fresh result own completion.
+6. After implementation, run `scenario_gate.py run --project-root .`, then
+   `scenario_gate.py completion --project-root . --finish`. Fix failed or stale
+   checks until completion is current, reports 100%, and clears the active task.
 
-## Contract Shape
+## Contract shape
 
 ```json
 {
@@ -35,8 +39,7 @@ Create the smallest executable behavior contract that covers the declared flow. 
     {
       "id": "S-EXAMPLE",
       "title": "Observable example",
-      "covers": {"acceptance": ["AC-1"], "flow": ["P1"]},
-      "runner": "example-check",
+      "command": ["python3", "-m", "unittest", "tests.test_example"],
       "given": ["an observable initial state"],
       "when": ["a public action occurs"],
       "then": ["the public result is visible"]
@@ -45,11 +48,19 @@ Create the smallest executable behavior contract that covers the declared flow. 
 }
 ```
 
+## Boundaries
+
+- Do not create one scenario per P line, function, class, or mock interaction.
+- Do not change expected outcomes to match implementation failures.
+- Commands are argv arrays; never add shell parsing.
+- Completion is explicit CLI/CI work; never wire the worktree-level active task
+  to a global Stop hook.
+- Successful runner logs stay out of model context.
+- Scenario review is authoring help. Fresh executable results own completion.
+
 ## Completion Criteria
 
-- Every Full-task AC is covered and every referenced P/AC exists.
-- Every scenario has one or more plain observable Then expectations.
-- Every scenario names an exclusive configured runner.
-- No risk, level, ownership, parent-candidate, overlay, or runner-review metadata is introduced.
-- Scenario readiness exits 0 before protected implementation begins.
-- Current exclusive scenario checks pass and completion reports 100% trace completeness.
+- The task, numbered flow, and at least one scenario are structurally valid.
+- Every scenario has non-empty Given, When, Then, and `"command"` arrays.
+- Design validation succeeds with `--activate`.
+- Current scenario checks pass and `completion --finish` reports 100%.

@@ -54,7 +54,7 @@ ARTIFACT>>>
 
 ## implementation.md: flow-design gate
 
-- **tier-1 강제**: Full root는 `flow-design`을 호출해 `implementation.md`에 fenced 번호형 수도코드(`P1`, `P2`, ...)와 fenced 제어 흐름 Mermaid를 모두 넣는다. 어느 하나라도 없으면 structural lint의 0점 floor가 실패한다. 분해된 자식은 설계를 생략하거나 축약하지 않고 `inherited-readiness.json`의 실제 P/AC 참조로 이 흐름을 상속한다.
+- **tier-1 강제**: active task의 `implementation.md`에는 fenced 번호형 수도코드(`P1`, `P2`, ...)와 fenced 제어 흐름 Mermaid가 모두 있어야 한다. 어느 하나라도 없으면 structural lint의 0점 floor가 실패한다.
 - **tier-2 판정 반영**: 블록이 있다는 사실은 완전성을 보장하지 않는다. 수도코드의 모든 분기와 WRITE/외부 CALL/PUBLISH 실패 경로가 닫혔는지, Mermaid의 결정 노드·분기 arm·terminal이 수도코드와 대응하는지를 actionability와 risk-response 근거로 판정한다. 의미가 빈약한 의식적 다이어그램은 가점하지 않는다.
 
 ## 한계 (정직하게)

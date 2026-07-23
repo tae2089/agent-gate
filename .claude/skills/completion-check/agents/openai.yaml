@@ -1,0 +1,4 @@
+interface:
+  display_name: "Completion Check"
+  short_description: "Verify active tasks before reporting completion"
+  default_prompt: "Use $completion-check before reporting implementation work complete."

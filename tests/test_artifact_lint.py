@@ -157,15 +157,15 @@ GOOD_WALKTHROUGH = """[2026-07-21 10:00] decision: 정규화를 parse_transcript
 
 GOOD_TASK = """# Contract
 
-- AC-1: A guarded source edit requires a fresh readiness assessment.
+- AC-1: A guarded source edit requires a structural design.
 
 # Test Plan
 
-- T-1 [Todo]: prove an unbound session is blocked before implementation.
+- T-1 [Todo]: prove a missing active design is blocked before implementation.
 
 # Implementation
 
-- [Todo] Add the gate in hooks/readiness_gate.py for AC-1.
+- [Todo] Add the gate in hooks/design_gate_hook.py for AC-1.
 
 # Verification
 
@@ -206,10 +206,10 @@ class TestImplementationProfile(unittest.TestCase):
     def test_i4_english_keywords_are_case_insensitive(self):
         content = """# Implementation
 
-- Design: normalize events in hooks/readiness_gate_hook.py.
-- Assumption: both runtimes provide a stable session id.
-- Affected file: tests/test_readiness_hook.py.
-- Risk: an outdated assessment must fail closed.
+- Design: normalize events in hooks/design_gate_hook.py.
+- Assumption: one worktree has one active task.
+- Affected file: tests/test_design_gate.py.
+- Risk: an invalid active design must fail closed.
 """ + PSEUDOCODE_BLOCK + FLOW_DIAGRAM_BLOCK
         data = json.loads(self.lint(content).stdout)
         self.assertTrue(data["passed"], data)
@@ -294,9 +294,9 @@ class TestTaskProfile(unittest.TestCase):
 
     def test_task_requires_each_workflow_section(self):
         for heading, body in (
-            ("# Contract", "- AC-1: A guarded source edit requires a fresh readiness assessment."),
-            ("# Test Plan", "- T-1 [Todo]: prove an unbound session is blocked before implementation."),
-            ("# Implementation", "- [Todo] Add the gate in hooks/readiness_gate.py for AC-1."),
+            ("# Contract", "- AC-1: A guarded source edit requires a structural design."),
+            ("# Test Plan", "- T-1 [Todo]: prove a missing active design is blocked before implementation."),
+            ("# Implementation", "- [Todo] Add the gate in hooks/design_gate_hook.py for AC-1."),
             ("# Verification", "- [Todo] Run the focused hook tests and the full test suite."),
         ):
             with self.subTest(heading=heading):

@@ -15,9 +15,7 @@ Fail-open: any adapter-level failure emits an allow/no-op so a shim bug can
 never lock an Antigravity session — the same policy the hooks themselves use.
 
 Antigravity coverage (measured against transcript_full.jsonl, codex-cli-style):
-- readiness (Pre/PostToolUse): supported — the tool call is normalized here.
-- scenario completion (Stop): supported — the bound task and normalized
-  workspace/session fields are passed to the deterministic completion hook.
+- Design Gate (PreToolUse): supported — the tool call is normalized here.
 - verifier (Stop): supported — transcript.py normalizes Antigravity lines and
   reads skill use from a view_file with args.IsSkillFile.
 - reinject: supported via PreInvocation — see antigravity_reinject.py, which
@@ -94,14 +92,11 @@ def emit(event: str, blocked: bool, reason: str | None) -> None:
             print(json.dumps({"decision": "continue", "reason": reason or "blocked by agent-gate"}))
         else:
             print("{}")
-    elif event == "posttooluse":
-        # PostToolUse cannot block (docs); the hook still ran (e.g. bind).
-        print("{}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--event", required=True, choices=("pretooluse", "posttooluse", "stop"))
+    parser.add_argument("--event", required=True, choices=("pretooluse", "stop"))
     parser.add_argument("command", nargs=argparse.REMAINDER,
                         help="-- followed by the underlying hook command")
     args = parser.parse_args()

@@ -6,7 +6,7 @@ in `.claude/skill-rules.json` are shared; each host reads its own manifest.
 | Host | Manifest | Hooks file | Script root |
 |------|----------|-----------|-------------|
 | Claude Code | `.claude-plugin/plugin.json` (+ `.claude-plugin/marketplace.json`) | `hooks/hooks.json` | `${CLAUDE_PLUGIN_ROOT}` |
-| Codex CLI | `.codex-plugin/plugin.json` | `hooks/hooks.json` + `hooks/codex-hooks.json` | `${CLAUDE_PLUGIN_ROOT}` (Codex compat shim) |
+| Codex CLI | `.codex-plugin/plugin.json` | `hooks/hooks.json` | `${CLAUDE_PLUGIN_ROOT}` (Codex compat shim) |
 | Antigravity | `plugin.json` (root) | `hooks.json` (root) | `$HOME/.gemini/antigravity-cli/plugins/agent-gate` |
 
 Requires `python3` on PATH. Hooks are stdlib-only.
@@ -34,8 +34,8 @@ codex plugin add agent-gate
 /reload-plugins
 ```
 Codex exports `CLAUDE_PLUGIN_ROOT` for Claude-plugin compatibility. Shared
-lifecycle hooks stay in `hooks/hooks.json`; the supplemental
-`hooks/codex-hooks.json` adds the `PreCompact(manual|auto)` handoff barrier.
+lifecycle hooks, including the `PreCompact(manual|auto)` handoff barrier, stay
+in `hooks/hooks.json`.
 Plugin-bundled hooks are non-managed — Codex will ask you to review/trust the
 exact definitions on first use and again after they change.
 
@@ -50,13 +50,34 @@ which the root `hooks.json` references by absolute path (`$HOME/...`) — the
 staging location is fixed, so no plugin-root variable is needed.
 
 ### Antigravity coverage (by design, not omission)
-- readiness gate (Pre/PostToolUse) and verifier (Stop) — supported via the
+- Design Gate (PreToolUse) and verifier (Stop) — supported via the
   `antigravity_adapter.py` shim (`write_to_file`→`Write`, `IsSkillFile`→skill).
+- Completion Gate is an explicit host-neutral CLI/CI command, not a lifecycle hook.
 - reinject — supported via `PreInvocation` + `injectSteps` on each `CHECKPOINT`
   (compaction).
 - watermark — **unsupported**: the Antigravity CLI records no token/usage in
   any readable store, and gating on a char-count estimate would make a
   deterministic gate probabilistic. Reinject covers context-loss recovery.
+
+### Lifecycle capability matrix
+
+| Capability | Claude Code | Codex CLI | Antigravity |
+|------------|-------------|-----------|-------------|
+| Pre-edit Design Gate | native hook | native hook | adapter |
+| Explicit Completion CLI/CI | supported | supported | supported |
+| Stop verifier gate | native hook | native hook | adapter |
+| Token watermark at Stop | supported | supported | unsupported (no deterministic usage source) |
+| PreCompact handoff barrier | native hook | native hook | unavailable |
+| Post-compaction reinject | `SessionStart(compact)` | `SessionStart(compact)` | `CHECKPOINT` injection |
+
+The shared semantic verdict for Stop is “continue the agent with corrective
+feedback.” Claude and Codex both express it as `decision:block` plus `reason`.
+The different PreCompact meaning is “cancel this compaction,” expressed as
+`continue:false`. Antigravity translates only the lifecycle events it exposes;
+missing capabilities are not approximated.
+
+The matrix and contract tests do not prove that an installed host consumes
+lifecycle verdicts end to end.
 
 ## Rules and your personal skills
 
@@ -76,20 +97,20 @@ to every project you install the plugin into.
 - If you also want per-project rules on top of the global set, point `--rules`
   at a project file instead, or ask for merge support (plugin + project).
 
-Readiness and scenario inheritance are host-neutral: a decomposed child writes
-`_workspace/<child>/inherited-readiness.json` referencing a ready direct Full
-parent and its P/AC scope. The same PostToolUse/PreToolUse hooks bind and
-revalidate it on Claude Code, Codex, and Antigravity; unit size never creates a
-Fast source-edit bypass. When the target repository opts in with
-`.agent-gate/scenario-gate.json`, every child keeps the direct Full parent's
-scenario contract and execution result as its completion boundary. The Stop
-hook requires 100% scenario trace completeness and every
-exclusive scenario check to pass. If a host cannot enforce Stop reliably, run
-`scripts/scenario_gate.py completion` as the CI merge gate.
+The two gates are host-neutral. `scenario_gate.py design ... --activate`
+records one active task per worktree; PreToolUse checks only its structural
+task, flow, and scenario artifacts. Completion is checked explicitly with
+`scripts/scenario_gate.py completion --project-root .`, and `--finish` clears
+the active task only after a fresh 100 percent result. No semantic readiness
+score, session binding, child inheritance, PostToolUse binding, or global
+Completion Stop hook participates.
 
 ## Bundled skills
 
-`artifact-judge` and `scenario-design` ship inside agent-gate. The default rules
+`artifact-judge`, `scenario-design`, and `completion-check` ship inside
+agent-gate. `completion-check` is implicit prompt guidance for the final report
+after implementation edits; it is intentionally absent from Stop hooks and
+verifier rules so ordinary conversation remains unaffected. The default rules
 require only `artifact-judge`, so installing a separate personal skill collection
 is not necessary. A downstream rule that names another skill is satisfiable only
 when that host has the named skill installed.
@@ -101,12 +122,12 @@ when that host has the named skill installed.
   (or replace with a plugin-root variable once one is documented).
 - `injectSteps` delivery to the model post-compaction is documented but not
   independently smoke-tested here.
-- Scenario runner commands are trusted repository configuration. The plugin
+- Scenario commands are trusted task artifacts. The plugin
   removes most inherited environment variables and never uses a shell, but it
   does not provide an OS-level network sandbox.
-- Every scenario requires an exclusive runner, so one process result is never
-  copied across scenario IDs. Scenario review may assist authoring, but only
-  the fresh executable result participates in completion.
+- Every scenario command runs once and records its own exit status. Scenario
+  review may assist authoring, but only the fresh executable result
+  participates in completion.
 - The repo's workspace configs (`.claude/settings.json`, `.codex/hooks.json`,
   `.agents/hooks.json`) are for dogfooding agent-gate on itself and are separate
   from these plugin manifests.

@@ -20,11 +20,6 @@
               "--window",
               "1000000"
             ]
-          },
-          {
-            "type": "command",
-            "command": "python3",
-            "args": ["${CLAUDE_PROJECT_DIR}/hooks/scenario_gate_hook.py"]
           }
         ]
       }
@@ -41,6 +36,18 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "matcher": "manual|auto",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/hooks/context_watermark.py"]
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Write|Edit|apply_patch",
@@ -49,25 +56,7 @@
             "type": "command",
             "command": "python3",
             "args": [
-              "${CLAUDE_PROJECT_DIR}/hooks/readiness_gate_hook.py",
-              "--mode",
-              "pre"
-            ]
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit|apply_patch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3",
-            "args": [
-              "${CLAUDE_PROJECT_DIR}/hooks/readiness_gate_hook.py",
-              "--mode",
-              "bind"
+              "${CLAUDE_PROJECT_DIR}/hooks/design_gate_hook.py"
             ]
           }
         ]

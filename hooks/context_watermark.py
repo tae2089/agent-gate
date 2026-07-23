@@ -95,10 +95,11 @@ def run_hook(window: int, threshold: float) -> int:
 
 
 def _print_block(hook_input: dict, reason: str) -> None:
-    """Emit the blocking verdict shape required by the active host."""
-    # Codex turn-scoped hooks add turn_id and use continue/stopReason; Claude
-    # Stop hooks use decision/reason. See https://learn.chatgpt.com/docs/hooks.
-    if isinstance(hook_input.get("turn_id"), str):
+    """Continue a Stop turn, but stop compaction itself at PreCompact."""
+    # Stop's decision:block feeds reason back to both Claude and Codex. A
+    # PreCompact barrier must stop the lifecycle event instead.
+    # https://learn.chatgpt.com/docs/hooks
+    if hook_input.get("hook_event_name") == "PreCompact":
         print(json.dumps({
             "continue": False,
             "stopReason": reason,

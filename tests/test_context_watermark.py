@@ -237,7 +237,7 @@ class TestWatermark(WatermarkHarness):
         )
         self.assertEqual(list(marker.parent.glob(".session-marker-*.tmp")), [])
 
-    def test_t20_codex_stop_uses_codex_block_contract(self):
+    def test_t20_codex_stop_continues_with_handoff_feedback(self):
         self.write_transcript([assistant_usage(185_000)])
 
         proc = self.run_hook(self.hook_input(
@@ -248,10 +248,9 @@ class TestWatermark(WatermarkHarness):
 
         self.assertEqual(proc.returncode, 0, proc.stderr)
         verdict = json.loads(proc.stdout)
-        self.assertEqual(verdict["continue"], False)
-        self.assertIn("handoff", verdict["stopReason"])
-        self.assertEqual(verdict["systemMessage"], verdict["stopReason"])
-        self.assertNotIn("decision", verdict)
+        self.assertEqual(verdict["decision"], "block")
+        self.assertIn("handoff", verdict["reason"])
+        self.assertNotIn("continue", verdict)
 
     def test_t21_claude_stop_keeps_claude_block_contract(self):
         self.write_transcript([assistant_usage(185_000)])

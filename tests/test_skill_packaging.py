@@ -31,12 +31,13 @@ class TestSkillPackaging(unittest.TestCase):
         self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
         self.assertTrue((codex_entry / "SKILL.md").is_file())
 
-    def test_artifact_judge_documents_inherited_child_readiness(self):
+    def test_artifact_judge_is_optional_and_not_a_design_gate(self):
         skill = (ROOT / ".claude" / "skills" / "artifact-judge" / "SKILL.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("inherited-readiness.json", skill)
-        self.assertIn("--inherit-from", skill)
+        self.assertNotIn("assessment.json", skill)
+        self.assertNotIn("inherited-readiness.json", skill)
+        self.assertNotIn("readiness_gate.py", skill)
 
     def test_scenario_design_is_shared_and_has_bounded_completion_criteria(self):
         canonical = ROOT / ".claude" / "skills" / "scenario-design"
@@ -46,8 +47,8 @@ class TestSkillPackaging(unittest.TestCase):
         skill = (canonical / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("scenario-contract.json", skill)
         self.assertIn("plain observable expectations", skill)
-        self.assertIn("exclusive", skill)
-        self.assertIn("3-5", skill)
+        self.assertIn('"command"', skill)
+        self.assertIn("--activate", skill)
         self.assertIn("Completion Criteria", skill)
 
     def test_scenario_completion_does_not_route_through_artifact_judge(self):
@@ -67,6 +68,57 @@ class TestSkillPackaging(unittest.TestCase):
             content = (ROOT / relative).read_text(encoding="utf-8")
             self.assertNotIn("scenario-evidence", content, relative)
             self.assertNotIn("evidence-template", content, relative)
+
+    def test_completion_check_is_shared_with_codex(self):
+        canonical = ROOT / ".claude" / "skills" / "completion-check"
+        codex_entry = ROOT / ".agents" / "skills" / "completion-check"
+
+        self.assertTrue((canonical / "SKILL.md").is_file())
+        self.assertTrue((canonical / "agents" / "openai.yaml").is_file())
+        self.assertTrue(codex_entry.is_symlink(), codex_entry)
+        self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
+
+    def test_completion_check_trigger_is_bounded(self):
+        skill = (
+            ROOT / ".claude" / "skills" / "completion-check" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        frontmatter = skill.split("---", 2)[1]
+
+        self.assertIn("before reporting implementation work complete", frontmatter)
+        self.assertIn("project files", frontmatter)
+        for excluded in (
+            "general conversation",
+            "explanation",
+            "status-only",
+            "planning-only",
+            "review-only",
+            "no project edits",
+        ):
+            self.assertIn(excluded, frontmatter)
+
+    def test_completion_check_is_not_hook_enforced(self):
+        skill = (
+            ROOT / ".claude" / "skills" / "completion-check" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("scenario_gate.py run --project-root . --json", skill)
+        self.assertIn(
+            "scenario_gate.py completion --project-root . --finish --json",
+            skill,
+        )
+
+        rules = (
+            ROOT / ".claude" / "skill-rules.json"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("completion-check", rules)
+        for relative in (
+            "hooks/hooks.json",
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".agents/hooks.json",
+            "hooks.json",
+        ):
+            config = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertNotIn("completion-check", config, relative)
 
 
 if __name__ == "__main__":

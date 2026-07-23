@@ -87,22 +87,10 @@ class StopOutputTest(unittest.TestCase):
         self.assertTrue(out in ("", "{}") or json.loads(out).get("decision") != "continue")
 
 
-class PostToolUseOutputTest(unittest.TestCase):
-    def test_posttooluse_always_empty_and_runs_hook(self):
-        # PostToolUse cannot block (docs), but the hook still runs (e.g. bind).
-        with tempfile.TemporaryDirectory() as d:
-            dump = Path(d) / "seen.json"
-            proc = run("posttooluse",
-                       [sys.executable, "-c", DUMP_TMPL.format(str(dump))],
-                       {"conversationId": "c1", "workspacePaths": ["/p"],
-                        "toolCall": {"name": "Write", "args": {"file_path": "a.py"}}})
-            self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertEqual(proc.stdout.strip(), "{}")
-            self.assertEqual(json.loads(dump.read_text())["session_id"], "c1")
-
-    def test_posttooluse_ignores_underlying_block(self):
-        proc = run("posttooluse", [sys.executable, "-c", BLOCK], {"workspacePaths": ["/p"]})
-        self.assertEqual(proc.stdout.strip(), "{}")
+class RemovedPostToolUseTest(unittest.TestCase):
+    def test_posttooluse_binding_event_is_not_supported(self):
+        proc = run("posttooluse", [sys.executable, "-c", PASS], {"workspacePaths": ["/p"]})
+        self.assertEqual(proc.returncode, 2)
 
 
 class FailOpenTest(unittest.TestCase):
