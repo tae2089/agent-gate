@@ -633,6 +633,164 @@ class CommandLineTest(unittest.TestCase):
             self.assertNotIn(forbidden, source)
 
 
+class TargetRepositoryPortabilityTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.project = Path(self.temp.name) / "product-repository"
+        self.project.mkdir()
+        init_git_project(self.project)
+        (self.project / ".git" / "info" / "exclude").write_text(
+            "_workspace/\n", encoding="utf-8"
+        )
+        self.task = self.project / "_workspace" / "portable-evolution"
+        self.task.mkdir(parents=True)
+        (self.task / "candidate-input.json").write_text(
+            json.dumps(candidate()), encoding="utf-8"
+        )
+        (self.task / "task.md").write_text(TASK, encoding="utf-8")
+        (self.task / "implementation.md").write_text(
+            IMPLEMENTATION, encoding="utf-8"
+        )
+        (self.task / "scenario-contract.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "scenarios": [
+                        {
+                            "id": "S-REPOSITORY-OWNED-TEST",
+                            "title": "The target repository behavior passes",
+                            "command": [
+                                sys.executable,
+                                "tests/verify_portability.py",
+                            ],
+                            "given": ["the target repository owns its test"],
+                            "when": ["the bundled runtime executes the scenario"],
+                            "then": ["the target behavior passes"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def run_script(self, name, *arguments):
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / name), *arguments],
+            cwd=self.project,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+    def run_ok(self, name, *arguments):
+        result = self.run_script(name, *arguments)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return result
+
+    def test_bundled_runtime_drives_non_agent_gate_repository_to_pr_ready(self):
+        task = "_workspace/portable-evolution"
+        common = ("--project-root", ".", "--json")
+        self.run_ok(
+            "evolution_loop.py",
+            "start",
+            task,
+            "--candidate",
+            f"{task}/candidate-input.json",
+            *common,
+        )
+        self.run_ok(
+            "scenario_gate.py", "design", task, "--activate", *common
+        )
+        self.run_ok(
+            "evolution_loop.py", "transition", task, "execute", *common
+        )
+
+        repository_test = self.project / "tests" / "verify_portability.py"
+        repository_test.write_text(
+            "from pathlib import Path\n"
+            "raise SystemExit("
+            "0 if Path('src/app.txt').read_text() == 'portable\\n' else 1"
+            ")\n",
+            encoding="utf-8",
+        )
+        def run_repository_test():
+            return subprocess.run(
+                [sys.executable, str(repository_test)],
+                cwd=self.project,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+        red = run_repository_test()
+        self.assertNotEqual(red.returncode, 0)
+        (self.project / "src" / "app.txt").write_text(
+            "portable\n", encoding="utf-8"
+        )
+        green = run_repository_test()
+        self.assertEqual(green.returncode, 0, green.stdout + green.stderr)
+        for command in (
+            ["git", "add", "src/app.txt", "tests/verify_portability.py"],
+            ["git", "commit", "-qm", "Implement portable behavior"],
+        ):
+            subprocess.run(
+                command,
+                cwd=self.project,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+        self.run_ok(
+            "evolution_loop.py", "transition", task, "evaluate", *common
+        )
+        self.run_ok("scenario_gate.py", "run", task, *common)
+        state = json.loads(
+            (self.task / "evolution-state.json").read_text(encoding="utf-8")
+        )
+        scenario_content = (self.task / "scenario-result.json").read_bytes()
+        evaluation = {
+            "schema_version": 1,
+            "verdict": "pr-ready",
+            "candidate_sha256": state["candidate_sha256"],
+            "scenario_result_sha256": hashlib.sha256(
+                scenario_content
+            ).hexdigest(),
+            "checks": {
+                name: {
+                    "passed": True,
+                    "evidence": [f"{name} verified in the target diff"],
+                }
+                for name in evolution_loop.EVALUATION_CHECK_NAMES
+            },
+            "findings": [],
+        }
+        (self.task / "evaluation-input.json").write_text(
+            json.dumps(evaluation), encoding="utf-8"
+        )
+        evaluated = self.run_ok(
+            "evolution_loop.py",
+            "evaluate",
+            task,
+            "--evaluation",
+            f"{task}/evaluation-input.json",
+            *common,
+        )
+
+        self.assertEqual(
+            json.loads(evaluated.stdout)["state"]["status"], "pr-ready"
+        )
+        self.assertFalse(
+            (self.project / "scripts" / "evolution_loop.py").exists()
+        )
+        self.assertTrue(
+            (self.task / "iterations" / "001" / "evaluation.json").is_file()
+        )
+
+
 class SkillPackagingTest(unittest.TestCase):
     def test_one_canonical_skill_is_shared_by_all_three_hosts(self):
         canonical = ROOT / "skills" / "evolution-loop"
@@ -719,6 +877,41 @@ class SkillPackagingTest(unittest.TestCase):
             self.assertNotIn("evolution_loop.py publish", normalized)
             self.assertNotIn("publish-blocked", normalized)
             self.assertNotIn("publish-uncertain", normalized)
+
+    def test_skill_targets_current_repository_through_plugin_runtime(self):
+        skill = (
+            ROOT / "skills" / "evolution-loop" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        docs = (ROOT / "README.md").read_text(encoding="utf-8")
+        plugin_docs = (ROOT / "PLUGIN.md").read_text(encoding="utf-8")
+
+        for content in (skill, docs, plugin_docs):
+            normalized = " ".join(content.split())
+            self.assertIn("target repository", normalized.lower())
+            self.assertIn("AGENT_GATE_ROOT", normalized)
+            self.assertIn("PROJECT_ROOT", normalized)
+        self.assertIn(
+            "$AGENT_GATE_ROOT/scripts/evolution_loop.py", skill
+        )
+        self.assertIn("$AGENT_GATE_ROOT/scripts/scenario_gate.py", skill)
+        self.assertNotIn("python3 scripts/evolution_loop.py", skill)
+        self.assertNotIn("python3 scripts/scenario_gate.py", skill)
+        self.assertNotIn("Operate only in the `agent-gate` repository", skill)
+        self.assertNotIn(
+            "self-evolution of the `agent-gate` repository", skill
+        )
+
+    def test_execute_uses_repository_native_verification(self):
+        skill = (
+            ROOT / "skills" / "evolution-loop" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        execute = skill.split("## Execute", 1)[1].split("## Evaluate", 1)[0]
+
+        self.assertIn("repository-native", execute)
+        self.assertIn("direct argv", execute)
+        self.assertIn("CI", execute)
+        self.assertNotIn("replay audit", execute)
+        self.assertNotIn("plugin validator", execute)
 
     def test_public_metadata_describes_the_optional_evolution_loop(self):
         paths = (

@@ -99,10 +99,17 @@ python3 scripts/scenario_gate.py completion --project-root . --finish --json
 
 ## 선택 기능: Evolutionary Loop
 
-`evolution-loop` skill은 agent-gate 저장소 자체만 대상으로 합니다. Codex,
-Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
+`evolution-loop` skill은 현재 target repository 하나를 대상으로 합니다.
+Codex, Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
 `Interview → Seed → Execute → Evaluate` 흐름을 독립 실행합니다. 내부
 스케줄러나 host별 상태 머신은 없습니다.
+
+Host는 로드된 skill의 절대 경로에서 플러그인 루트 `AGENT_GATE_ROOT`를
+결정하고, 현재 target Git worktree의 실제 루트를 `PROJECT_ROOT`로
+결정합니다. 번들 스크립트는 `AGENT_GATE_ROOT`에서 실행하지만
+`_workspace/**`, 소스, 테스트, Git 변경은 모두 `PROJECT_ROOT`에 남습니다.
+경로를 확인할 수 없으면 `blocked`로 끝내며 runtime을 target repository에
+복사하지 않습니다.
 
 **User Request가 유일한 진입점**입니다.
 
@@ -119,9 +126,10 @@ Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
 publication 설정을 받거나 저장하지 않습니다.
 
 ```bash
-python3 scripts/evolution_loop.py start _workspace/evolution-<slug> \
+python3 "$AGENT_GATE_ROOT/scripts/evolution_loop.py" start \
+  _workspace/evolution-<slug> \
   --candidate _workspace/evolution-<slug>/candidate-input.json \
-  --project-root . --max-iterations 3 --json
+  --project-root "$PROJECT_ROOT" --max-iterations 3 --json
 ```
 
 루프는 direct `_workspace/<task>`의 `candidate.json`,
@@ -130,6 +138,10 @@ Seed는 기존 Design Gate를 통과해야 하고 Evaluate는 fresh 100%
 Completion과 다음 네 evidence check를 함께 요구합니다:
 `planned_scope_only`, `no_speculative_abstraction`,
 `compatibility_has_consumer`, `simpler_alternative_considered`.
+Seed와 Execute의 test command는 target repository의 지침, 기존 테스트,
+CI 설정에서 request와 관련된 최소 direct argv를 선택합니다. 언어, package
+manager, agent-gate 전용 replay audit이나 plugin validator를 가정하지
+않습니다.
 
 `pr-ready`가 되면 AI host가 사용 가능한 GitHub MCP 또는 skill로 현재
 repository를 확인하고 committed branch를 push한 뒤 정확한 head/base PR을
@@ -137,8 +149,9 @@ repository를 확인하고 committed branch를 push한 뒤 정확한 head/base P
 HTTPS receipt만 기록합니다.
 
 ```bash
-python3 scripts/evolution_loop.py record-pr _workspace/evolution-<slug> \
-  --project-root . --url <verified-pr-url> --json
+python3 "$AGENT_GATE_ROOT/scripts/evolution_loop.py" record-pr \
+  _workspace/evolution-<slug> \
+  --project-root "$PROJECT_ROOT" --url <verified-pr-url> --json
 ```
 
 `record-pr`는 provider나 subprocess를 호출하지 않습니다. current 100%
@@ -153,7 +166,8 @@ comment/close/transition은 수행하지 않습니다.
 전체 실행 절차와 artifact schema는 bundled `evolution-loop` skill에
 있습니다. 로컬 contract test는 세 host가 MCP/skill로 실제 request context를
 조회하거나 전체 절차를 따른 것을 증명하지 않으므로 Claude와 Antigravity는
-disposable clone에서 실 session smoke가 별도로 필요합니다.
+agent-gate runtime 파일이 없는 disposable target repository clone에서 실
+session smoke가 별도로 필요합니다.
 
 ## 선택 기능: context preservation
 
