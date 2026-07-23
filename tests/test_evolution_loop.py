@@ -10,7 +10,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tests"))
@@ -26,99 +25,48 @@ def candidate(**overrides):
     value = {
         "schema_version": 1,
         "kind": "bug",
-        "source": "code-analysis",
-        "source_ref": "scripts/example.py:12",
+        "source": "manual",
+        "source_ref": "manual-request-2026-07-23",
         "title": "Observable failure",
         "problem": "The declared branch returns the wrong status.",
-        "evidence": ["tests.test_example reproduces the wrong status"],
+        "evidence": ["The user reported an observable failure."],
         "labels": [],
+        "request": "재현 가능한 오류를 고쳐줘.",
     }
     value.update(overrides)
     return value
 
 
 class CandidatePolicyTest(unittest.TestCase):
-    def test_manual_feature_preserves_verbatim_request(self):
+    def test_all_supported_work_kinds_preserve_verbatim_user_request(self):
         request = "CSV 내보내기에 실패 행의 이유를 포함해 줘."
-        result = evolution_loop.validate_candidate(
-            candidate(
-                kind="feature",
-                source="manual",
-                source_ref="manual-request-2026-07-23",
-                request=request,
-            )
-        )
-
-        self.assertTrue(result.allowed, result.errors)
-        self.assertEqual(result.candidate["request"], request)
-
-    def test_agent_ready_github_and_jira_features_are_allowed(self):
-        for source, source_ref in (
-            ("github", "https://github.com/tae2089/agent-gate/issues/17"),
-            ("jira", "AG-17"),
-        ):
-            with self.subTest(source=source):
+        for kind in ("feature", "bug", "contract-violation", "technical-debt"):
+            with self.subTest(kind=kind):
                 result = evolution_loop.validate_candidate(
-                    candidate(
-                        kind="feature",
-                        source=source,
-                        source_ref=source_ref,
-                        labels=["agent-ready", "enhancement"],
-                    )
+                    candidate(kind=kind, request=request)
                 )
 
                 self.assertTrue(result.allowed, result.errors)
+                self.assertEqual(result.candidate["request"], request)
 
-    def test_unapproved_or_invented_product_features_are_rejected(self):
-        cases = (
-            candidate(kind="feature", source="code-analysis"),
-            candidate(kind="feature", source="github", labels=["enhancement"]),
-            candidate(kind="feature", source="jira", labels=[]),
-            candidate(kind="feature", source="manual"),
-        )
-        for value in cases:
-            with self.subTest(source=value["source"], labels=value["labels"]):
-                result = evolution_loop.validate_candidate(value)
+    def test_external_sources_and_missing_user_requests_are_rejected(self):
+        for source in ("github", "jira", "ci", "repository", "code-analysis"):
+            with self.subTest(source=source):
+                result = evolution_loop.validate_candidate(
+                    candidate(source=source)
+                )
 
                 self.assertFalse(result.allowed)
+                self.assertIn("source must be manual", " ".join(result.errors))
 
-    def test_external_feature_start_requires_a_matching_live_discovery_record(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            task = Path(temporary) / "_workspace" / "sample"
-            task.mkdir(parents=True)
-            value = candidate(
-                kind="feature",
-                source="github",
-                source_ref="https://github.com/tae2089/agent-gate/issues/17",
-                labels=["agent-ready"],
-            )
+        missing = candidate()
+        del missing["request"]
+        empty = candidate(request=" ")
 
-            missing = evolution_loop.start_run(task, value)
-            approved = evolution_loop.start_run(
-                task,
-                value,
-                approved_records=[
-                    {
-                        "source": "github",
-                        "source_ref": value["source_ref"],
-                        "title": value["title"],
-                        "body": value["problem"],
-                        "labels": ["agent-ready"],
-                        "updated_at": "2026-07-23T01:02:03Z",
-                    }
-                ],
-            )
+        self.assertFalse(evolution_loop.validate_candidate(missing).allowed)
+        self.assertFalse(evolution_loop.validate_candidate(empty).allowed)
 
-            self.assertFalse(missing.allowed)
-            self.assertIn("live discovery", " ".join(missing.errors))
-            self.assertTrue(approved.allowed, approved.errors)
-
-    def test_code_analysis_accepts_only_evidenced_non_feature_work(self):
-        for kind in ("bug", "contract-violation", "technical-debt"):
-            with self.subTest(kind=kind):
-                result = evolution_loop.validate_candidate(candidate(kind=kind))
-                self.assertTrue(result.allowed, result.errors)
-
+    def test_unsupported_kind_or_empty_evidence_is_rejected(self):
         unsupported = evolution_loop.validate_candidate(
             candidate(kind="preference-refactor")
         )
@@ -129,7 +77,7 @@ class CandidatePolicyTest(unittest.TestCase):
 
     def test_unknown_fields_and_malformed_strings_are_rejected(self):
         with_unknown = candidate(score=0.95)
-        malformed = candidate(title=" ", labels=["agent-ready", ""])
+        malformed = candidate(title=" ", labels=["context", ""])
 
         self.assertFalse(evolution_loop.validate_candidate(with_unknown).allowed)
         self.assertFalse(evolution_loop.validate_candidate(malformed).allowed)
@@ -382,251 +330,6 @@ class GitHubRepositoryContextTest(unittest.TestCase):
                 self.assertIn(expected, " ".join(errors))
                 self.assertNotIn("credential material", " ".join(errors))
                 self.assertNotIn("private repository detail", " ".join(errors))
-
-
-class DiscoveryTest(unittest.TestCase):
-    def test_github_issues_and_failed_ci_are_normalized(self):
-        commands = []
-
-        def run_command(argv, **kwargs):
-            commands.append(list(argv))
-            if argv[:3] == ["gh", "auth", "status"]:
-                return subprocess.CompletedProcess(argv, 0, "", "")
-            if argv[:3] == ["gh", "repo", "view"]:
-                return subprocess.CompletedProcess(
-                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
-                )
-            if argv[1:3] == ["issue", "list"]:
-                payload = [
-                    {
-                        "number": 17,
-                        "title": "Export failure reasons",
-                        "body": "Requested behavior",
-                        "labels": [{"name": "agent-ready"}, {"name": "feature"}],
-                        "url": "https://github.com/tae2089/agent-gate/issues/17",
-                        "updatedAt": "2026-07-23T01:02:03Z",
-                    }
-                ]
-            else:
-                payload = [
-                    {
-                        "databaseId": 91,
-                        "displayTitle": "Unit tests",
-                        "conclusion": "failure",
-                        "status": "completed",
-                        "url": "https://github.com/tae2089/agent-gate/actions/runs/91",
-                        "workflowName": "agent-gate-ci",
-                        "updatedAt": "2026-07-23T02:03:04Z",
-                    }
-                ]
-            return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
-
-        result = evolution_loop.discover_evidence(
-            ROOT, environment={}, command_runner=run_command
-        )
-
-        self.assertEqual(result.github_repository, "tae2089/agent-gate")
-        self.assertEqual(result.errors, ("Jira discovery is not configured",))
-        self.assertEqual([item["source"] for item in result.records], ["github", "ci"])
-        self.assertEqual(result.records[0]["labels"], ["agent-ready", "feature"])
-        self.assertEqual(result.records[1]["source_ref"], (
-            "https://github.com/tae2089/agent-gate/actions/runs/91"
-        ))
-        github_reads = [
-            command
-            for command in commands
-            if command[:3] in (["gh", "issue", "list"], ["gh", "run", "list"])
-        ]
-        self.assertEqual(len(github_reads), 2)
-        self.assertTrue(
-            all(
-                command[command.index("--repo") + 1] == "tae2089/agent-gate"
-                for command in github_reads
-            )
-        )
-
-    def test_jira_search_uses_jql_and_never_returns_credentials(self):
-        captured = {}
-
-        def run_command(argv, **kwargs):
-            if argv[:3] == ["gh", "auth", "status"]:
-                return subprocess.CompletedProcess(argv, 0, "", "")
-            if argv[:3] == ["gh", "repo", "view"]:
-                return subprocess.CompletedProcess(
-                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
-                )
-            return subprocess.CompletedProcess(argv, 0, "[]", "")
-
-        class Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return None
-
-            def read(self):
-                return json.dumps(
-                    {
-                        "isLast": True,
-                        "issues": [
-                            {
-                                "key": "AG-17",
-                                "fields": {
-                                    "summary": "Preserve failure reasons",
-                                    "description": {
-                                        "type": "doc",
-                                        "content": [
-                                            {
-                                                "type": "paragraph",
-                                                "content": [
-                                                    {
-                                                        "type": "text",
-                                                        "text": "Requested behavior",
-                                                    }
-                                                ],
-                                            }
-                                        ],
-                                    },
-                                    "labels": ["agent-ready", "feature"],
-                                    "issuetype": {"name": "Story"},
-                                    "status": {"name": "To Do"},
-                                },
-                            }
-                        ],
-                    }
-                ).encode("utf-8")
-
-        def open_request(request, timeout):
-            captured["request"] = request
-            captured["timeout"] = timeout
-            return Response()
-
-        environment = {
-            "AGENT_GATE_JIRA_BASE_URL": "https://example.atlassian.net",
-            "AGENT_GATE_JIRA_EMAIL": "agent@example.invalid",
-            "AGENT_GATE_JIRA_API_TOKEN": "non-secret-test-placeholder",
-        }
-        result = evolution_loop.discover_evidence(
-            ROOT,
-            environment=environment,
-            command_runner=run_command,
-            jira_opener=open_request,
-        )
-
-        self.assertEqual(result.errors, ())
-        self.assertEqual(len(result.records), 1)
-        self.assertEqual(result.records[0]["source"], "jira")
-        self.assertEqual(result.records[0]["source_ref"], (
-            "https://example.atlassian.net/browse/AG-17"
-        ))
-        self.assertEqual(result.records[0]["body"], "Requested behavior")
-        self.assertNotIn(environment["AGENT_GATE_JIRA_API_TOKEN"], repr(result))
-        request_body = json.loads(captured["request"].data.decode("utf-8"))
-        self.assertIn('labels = "agent-ready"', request_body["jql"])
-        self.assertEqual(captured["timeout"], 30)
-
-    def test_source_failures_are_independent_and_bounded(self):
-        def run_command(argv, **kwargs):
-            if argv[:3] == ["gh", "auth", "status"]:
-                return subprocess.CompletedProcess(argv, 0, "", "")
-            if argv[:3] == ["gh", "repo", "view"]:
-                return subprocess.CompletedProcess(
-                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
-                )
-            return subprocess.CompletedProcess(
-                argv, 2, "", "sensitive provider diagnostics"
-            )
-
-        def open_request(request, timeout):
-            raise HTTPError(request.full_url, 401, "Unauthorized", {}, None)
-
-        environment = {
-            "AGENT_GATE_JIRA_BASE_URL": "https://example.atlassian.net",
-            "AGENT_GATE_JIRA_EMAIL": "agent@example.invalid",
-            "AGENT_GATE_JIRA_API_TOKEN": "non-secret-test-placeholder",
-        }
-        result = evolution_loop.discover_evidence(
-            ROOT,
-            environment=environment,
-            command_runner=run_command,
-            jira_opener=open_request,
-        )
-
-        self.assertEqual(result.records, ())
-        self.assertEqual(len(result.errors), 3)
-        self.assertTrue(all("sensitive provider" not in error for error in result.errors))
-        self.assertIn("Jira discovery failed with HTTP 401", result.errors)
-
-    def test_partial_jira_configuration_does_not_make_a_request(self):
-        def run_command(argv, **kwargs):
-            if argv[:3] == ["gh", "auth", "status"]:
-                return subprocess.CompletedProcess(argv, 0, "", "")
-            if argv[:3] == ["gh", "repo", "view"]:
-                return subprocess.CompletedProcess(
-                    argv, 0, '{"nameWithOwner":"tae2089/agent-gate"}', ""
-                )
-            return subprocess.CompletedProcess(argv, 0, "[]", "")
-
-        def unexpected_request(request, timeout):
-            raise AssertionError("partial configuration must not make a request")
-
-        result = evolution_loop.discover_evidence(
-            ROOT,
-            environment={"AGENT_GATE_JIRA_BASE_URL": "https://example.atlassian.net"},
-            command_runner=run_command,
-            jira_opener=unexpected_request,
-        )
-
-        self.assertEqual(
-            result.errors,
-            ("Jira discovery configuration is incomplete",),
-        )
-
-    def test_failed_github_preflight_skips_github_reads_but_keeps_jira(self):
-        commands = []
-
-        def run_command(argv, **kwargs):
-            commands.append(list(argv))
-            raise FileNotFoundError("missing gh")
-
-        class Response:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *args):
-                return None
-
-            def read(self):
-                return json.dumps(
-                    {
-                        "issues": [
-                            {
-                                "key": "AG-21",
-                                "fields": {
-                                    "summary": "Independent Jira work",
-                                    "description": "Jira remains available",
-                                    "labels": ["agent-ready"],
-                                },
-                            }
-                        ]
-                    }
-                ).encode("utf-8")
-
-        result = evolution_loop.discover_evidence(
-            ROOT,
-            environment={
-                "AGENT_GATE_JIRA_BASE_URL": "https://example.atlassian.net",
-                "AGENT_GATE_JIRA_EMAIL": "agent@example.invalid",
-                "AGENT_GATE_JIRA_API_TOKEN": "non-secret-test-placeholder",
-            },
-            command_runner=run_command,
-            jira_opener=lambda request, timeout: Response(),
-        )
-
-        self.assertIsNone(result.github_repository)
-        self.assertEqual(commands, [["gh", "auth", "status"]])
-        self.assertEqual([record["source"] for record in result.records], ["jira"])
-        self.assertIn("could not start", " ".join(result.errors))
 
 
 class EvaluationGateTest(unittest.TestCase):
@@ -1044,22 +747,7 @@ class CommandLineTest(unittest.TestCase):
         fake_gh = executable_dir / "gh"
         fake_gh.write_text(
             f"""#!{sys.executable}
-import json
-import os
-import sys
-
-if sys.argv[1:3] == ["auth", "status"]:
-    if os.environ.get("AGENT_GATE_TEST_GH_AUTH_FAIL"):
-        print("provider credential detail", file=sys.stderr)
-        raise SystemExit(2)
-    raise SystemExit(0)
-if sys.argv[1:3] == ["repo", "view"]:
-    print(json.dumps({{"nameWithOwner": "tae2089/agent-gate"}}))
-    raise SystemExit(0)
-if sys.argv[1:3] in (["issue", "list"], ["run", "list"]):
-    print("[]")
-    raise SystemExit(0)
-raise SystemExit(0)
+raise SystemExit(97)
 """,
             encoding="utf-8",
         )
@@ -1129,10 +817,7 @@ raise SystemExit(0)
             "tae2089/agent-gate",
         )
 
-    def test_start_preflight_failure_writes_no_state_or_provider_diagnostics(self):
-        environment = dict(self.environment)
-        environment["AGENT_GATE_TEST_GH_AUTH_FAIL"] = "1"
-
+    def test_malformed_repository_writes_no_state(self):
         result = self.run_cli(
             "start",
             str(self.task),
@@ -1140,13 +825,13 @@ raise SystemExit(0)
             str(self.candidate_path),
             "--project-root",
             str(self.project),
+            "--github-repo",
+            "https://github.com/tae2089/agent-gate",
             "--json",
-            environment=environment,
         )
 
         self.assertEqual(result.returncode, 1)
-        self.assertIn("authentication failed", result.stdout)
-        self.assertNotIn("provider credential detail", result.stdout)
+        self.assertIn("owner/repo", result.stdout)
         self.assertFalse((self.task / "evolution-state.json").exists())
 
     def test_task_outside_direct_workspace_is_rejected(self):
@@ -1168,6 +853,22 @@ raise SystemExit(0)
         self.assertEqual(result.returncode, 1)
         self.assertIn("direct _workspace task", result.stdout)
         self.assertFalse((outside / "evolution-state.json").exists())
+
+    def test_cli_and_core_expose_no_provider_discovery(self):
+        help_result = self.run_cli("--help")
+        source = (
+            ROOT / "scripts" / "evolution_loop.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(help_result.returncode, 0, help_result.stderr)
+        self.assertNotIn("discover", help_result.stdout)
+        for forbidden in (
+            "AGENT_GATE_JIRA_",
+            '"issue",\n            "list"',
+            '"run",\n            "list"',
+            "def discover_evidence",
+        ):
+            self.assertNotIn(forbidden, source)
 
 
 class SkillPackagingTest(unittest.TestCase):
@@ -1197,7 +898,7 @@ class SkillPackagingTest(unittest.TestCase):
             "evaluation.json",
             "scenario_gate.py",
             "evolution_loop.py",
-            "agent-ready",
+            "verbatim user request",
             "needs-clarification",
             "pr-opened",
         ):
@@ -1220,17 +921,22 @@ class SkillPackagingTest(unittest.TestCase):
         self.assertIn("Never retry a denied write", normalized)
         self.assertIn("terminate `blocked`", normalized)
 
-    def test_skill_and_docs_bind_one_preflighted_github_repository(self):
+    def test_skill_and_docs_make_user_request_the_only_entrypoint(self):
         skill = (
             ROOT / "skills" / "evolution-loop" / "SKILL.md"
         ).read_text(encoding="utf-8")
         docs = (ROOT / "README.md").read_text(encoding="utf-8")
+        plugin_docs = (ROOT / "PLUGIN.md").read_text(encoding="utf-8")
 
-        for content in (skill, docs):
-            normalized = " ".join(content.split())
-            self.assertIn("--github-repo <owner/repo>", normalized)
-            self.assertIn("github_repository", normalized)
-            self.assertIn("before Seed", normalized)
+        self.assertIn("sole trigger", skill.lower())
+        self.assertIn("유일한 진입점", docs)
+        self.assertIn("sole trigger", plugin_docs.lower())
+        for content in (skill, docs, plugin_docs):
+            normalized = " ".join(content.split()).lower()
+            self.assertIn("mcp", normalized)
+            self.assertIn("skill", normalized)
+            self.assertNotIn("agent-ready", normalized)
+            self.assertNotIn("evolution_loop.py discover", normalized)
         self.assertNotIn("codex exec", skill)
         self.assertNotIn("claude -p", skill)
         self.assertNotIn("agy -p", skill)
@@ -1269,7 +975,8 @@ class SkillPackagingTest(unittest.TestCase):
             "seed",
             "execute",
             "evaluate",
-            "agent-ready",
+            "user request",
+            "mcp",
             "needs-clarification",
             "budget-exhausted",
             "pr-opened",

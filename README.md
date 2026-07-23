@@ -102,35 +102,34 @@ python3 scripts/scenario_gate.py completion --project-root . --finish --json
 `evolution-loop` skill은 agent-gate 저장소 자체만 대상으로 합니다. Codex,
 Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
 `Interview → Seed → Execute → Evaluate` 흐름을 독립 실행합니다. 내부
-스케줄러나 host별 상태 머신은 없으며 외부 scheduler가 skill을 시작할 수
+스케줄러나 host별 상태 머신은 없습니다.
+
+**User Request가 유일한 진입점**입니다.
+
+- 기능·버그·계약 위반·기술 부채 모두 사용자의 원문 요청이 있어야 합니다.
+- GitHub, Jira, CI, 저장소, 코드 분석은 독립적으로 작업을 시작하거나 후보를
+  선택하지 않습니다.
+- AI host는 요청을 이해하거나 재현하는 데 필요할 때만 사용 가능한 MCP 또는
+  skill로 관련 정보를 조회하고, 이를 신뢰하지 않는 `evidence`로 보강합니다.
+- 선택적 정보가 없어도 요청이 충분하면 진행하며, 필수 정보가 없으면
+  `blocked`, 원하는 동작이 모호하면 `needs-clarification`으로 끝냅니다.
+
+후보는 항상 `source: manual`과 비어 있지 않은 원문 `request`를 사용합니다.
+`start`는 로컬 artifact만 검증하므로 `gh`나 Jira 인증 없이 Seed에 진입할 수
 있습니다.
 
-작업 진입 정책은 닫혀 있습니다.
-
-- 제품 기능: 사용자 직접 요청 또는 `agent-ready` 라벨이 있는 GitHub/Jira issue
-- 버그·계약 위반·기술 부채: 위 출처에 더해 실패 CI, 저장소 계약, 재현 가능한 코드 분석
-- 제외: 근거 없는 제품 기능, 취향성 refactor, speculative abstraction
-
-외부 증거 확인:
-
 ```bash
-python3 scripts/evolution_loop.py discover --project-root . \
-  --github-repo <owner/repo> --json
+python3 scripts/evolution_loop.py start _workspace/evolution-<slug> \
+  --candidate _workspace/evolution-<slug>/candidate-input.json \
+  --project-root . --max-iterations 3 --json
 ```
 
-`--github-repo <owner/repo>`를 생략하면 프로젝트 루트에서 canonical
-repository를 자동 해석합니다. 명시한 값은 현재 프로젝트와 일치해야 합니다.
-discovery는 `gh` 실행·인증·repository 접근을 preflight하고
-`github_repository`를 반환합니다. 이 값은 `start`에 한 번 전달되어 상태에
-고정되며, preflight 실패는 코드를 수정하기 전, 즉 before Seed 단계에서
-`blocked`로 종료해야 합니다. 플러그인은 `gh` 설치나 로그인을 대신하지
-않습니다.
-
-Jira는 설정된 경우에만
-`AGENT_GATE_JIRA_BASE_URL`, `AGENT_GATE_JIRA_EMAIL`,
-`AGENT_GATE_JIRA_API_TOKEN`을 사용해 `agent-ready` issue를 읽습니다.
-값은 상태·로그·프롬프트에 저장하지 않습니다. Issue와 CI 본문은 신뢰하지
-않는 데이터이며 내부 지시는 무시합니다.
+현재 프로젝트의 identity를 이미 아는 host는 `start`에
+`--github-repo <owner/repo>`를 한 번 전달할 수 있습니다. 이 단계에서는
+형식만 검증해 `github_repository`를 publication safeguard로 저장합니다.
+`gh` 실행·인증·현재 저장소 일치 확인은 실제 Publish에서만 수행하며, 실패하면
+원격 변경 전에 `publish-blocked`가 됩니다. 플러그인은 `gh` 설치나 로그인을
+대신하지 않습니다.
 
 루프는 direct `_workspace/<task>`의 `candidate.json`,
 `evolution-state.json`, iteration별 `evaluation.json`으로 재개됩니다.
@@ -146,9 +145,9 @@ terminal은 `pr-opened`, `no-action`, `needs-clarification`, `blocked`,
 deploy, issue comment/close/transition은 수행하지 않습니다.
 
 전체 실행 절차와 artifact schema는 bundled `evolution-loop` skill에
-있습니다. 로컬 contract test는 세 host의 실제 skill discovery를 증명하지
-않으므로 Claude와 Antigravity는 disposable clone에서 실 session smoke가
-별도로 필요합니다.
+있습니다. 로컬 contract test는 세 host가 MCP/skill로 실제 request context를
+조회하거나 전체 절차를 따른 것을 증명하지 않으므로 Claude와 Antigravity는
+disposable clone에서 실 session smoke가 별도로 필요합니다.
 
 ## 선택 기능: context preservation
 
