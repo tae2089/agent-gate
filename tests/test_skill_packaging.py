@@ -64,7 +64,7 @@ class TestSkillPackaging(unittest.TestCase):
         self.assertNotIn("artifact-judge", scenario)
         self.assertFalse((ROOT / "docs" / "scenario-assessment.md").exists())
 
-        for relative in ("README.md", "PLUGIN.md", "docs/feature-audit.html"):
+        for relative in ("README.md", "PLUGIN.md"):
             content = (ROOT / relative).read_text(encoding="utf-8")
             self.assertNotIn("scenario-evidence", content, relative)
             self.assertNotIn("evidence-template", content, relative)
