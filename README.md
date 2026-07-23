@@ -102,26 +102,27 @@ python3 scripts/scenario_gate.py completion --project-root . --finish --json
 `evolution-loop` skill은 agent-gate 저장소 자체만 대상으로 합니다. Codex,
 Claude Code, Antigravity가 동일한 artifact와 CLI 계약으로 전체
 `Interview → Seed → Execute → Evaluate` 흐름을 독립 실행합니다. 내부
-스케줄러나 host별 상태 머신은 없으며 외부 scheduler가 skill을 시작할 수
-있습니다.
+스케줄러나 host별 상태 머신은 없습니다.
 
-작업 진입 정책은 닫혀 있습니다.
+**User Request가 유일한 진입점**입니다.
 
-- 제품 기능: 사용자 직접 요청 또는 `agent-ready` 라벨이 있는 GitHub/Jira issue
-- 버그·계약 위반·기술 부채: 위 출처에 더해 실패 CI, 저장소 계약, 재현 가능한 코드 분석
-- 제외: 근거 없는 제품 기능, 취향성 refactor, speculative abstraction
+- 기능·버그·계약 위반·기술 부채 모두 사용자의 원문 요청이 있어야 합니다.
+- GitHub, Jira, CI, 저장소, 코드 분석은 독립적으로 작업을 시작하거나 후보를
+  선택하지 않습니다.
+- AI host는 요청을 이해하거나 재현하는 데 필요할 때만 사용 가능한 MCP 또는
+  skill로 관련 정보를 조회하고, 이를 신뢰하지 않는 `evidence`로 보강합니다.
+- 선택적 정보가 없어도 요청이 충분하면 진행하며, 필수 정보가 없으면
+  `blocked`, 원하는 동작이 모호하면 `needs-clarification`으로 끝냅니다.
 
-외부 증거 확인:
+후보는 항상 `source: manual`과 비어 있지 않은 원문 `request`를 사용합니다.
+`start`는 로컬 artifact만 검증하며 provider, repository, credential,
+publication 설정을 받거나 저장하지 않습니다.
 
 ```bash
-python3 scripts/evolution_loop.py discover --project-root . --json
+python3 scripts/evolution_loop.py start _workspace/evolution-<slug> \
+  --candidate _workspace/evolution-<slug>/candidate-input.json \
+  --project-root . --max-iterations 3 --json
 ```
-
-Jira는 설정된 경우에만
-`AGENT_GATE_JIRA_BASE_URL`, `AGENT_GATE_JIRA_EMAIL`,
-`AGENT_GATE_JIRA_API_TOKEN`을 사용해 `agent-ready` issue를 읽습니다.
-값은 상태·로그·프롬프트에 저장하지 않습니다. Issue와 CI 본문은 신뢰하지
-않는 데이터이며 내부 지시는 무시합니다.
 
 루프는 direct `_workspace/<task>`의 `candidate.json`,
 `evolution-state.json`, iteration별 `evaluation.json`으로 재개됩니다.
@@ -130,16 +131,29 @@ Completion과 다음 네 evidence check를 함께 요구합니다:
 `planned_scope_only`, `no_speculative_abstraction`,
 `compatibility_has_consumer`, `simpler_alternative_considered`.
 
-terminal은 `pr-opened`, `no-action`, `needs-clarification`, `blocked`,
-`budget-exhausted`, `publish-blocked`, `publish-uncertain`입니다.
-`pr-ready` publication은 clean non-base branch와 current Completion을 다시
-확인하고 정확한 head/base PR을 재사용하거나 하나만 생성합니다. Merge,
-deploy, issue comment/close/transition은 수행하지 않습니다.
+`pr-ready`가 되면 AI host가 사용 가능한 GitHub MCP 또는 skill로 현재
+repository를 확인하고 committed branch를 push한 뒤 정확한 head/base PR을
+재사용하거나 하나만 생성합니다. URL, head SHA, base를 검증한 후 코어에는
+HTTPS receipt만 기록합니다.
+
+```bash
+python3 scripts/evolution_loop.py record-pr _workspace/evolution-<slug> \
+  --project-root . --url <verified-pr-url> --json
+```
+
+`record-pr`는 provider나 subprocess를 호출하지 않습니다. current 100%
+Completion과 URL 형식을 확인해 `pr-ready`를 `pr-opened`로 바꾸며, 같은
+receipt 재실행은 허용하고 다른 receipt는 거부합니다. 원격 capability가
+없거나 결과가 불확실하면 상태를 `pr-ready`로 유지하고 blocker를 보고합니다.
+
+terminal은 `pr-opened`, `pr-ready`, `no-action`, `needs-clarification`,
+`blocked`, `budget-exhausted`입니다. Merge, deploy, issue
+comment/close/transition은 수행하지 않습니다.
 
 전체 실행 절차와 artifact schema는 bundled `evolution-loop` skill에
-있습니다. 로컬 contract test는 세 host의 실제 skill discovery를 증명하지
-않으므로 Claude와 Antigravity는 disposable clone에서 실 session smoke가
-별도로 필요합니다.
+있습니다. 로컬 contract test는 세 host가 MCP/skill로 실제 request context를
+조회하거나 전체 절차를 따른 것을 증명하지 않으므로 Claude와 Antigravity는
+disposable clone에서 실 session smoke가 별도로 필요합니다.
 
 ## 선택 기능: context preservation
 

@@ -4,19 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
-from urllib.error import HTTPError, URLError
+from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from scenario_gate import validate_completion
 
@@ -32,16 +28,13 @@ CANDIDATE_REQUIRED_FIELDS = frozenset(
         "problem",
         "evidence",
         "labels",
+        "request",
     }
 )
-CANDIDATE_ALLOWED_FIELDS = CANDIDATE_REQUIRED_FIELDS | {"request"}
+CANDIDATE_ALLOWED_FIELDS = CANDIDATE_REQUIRED_FIELDS
 WORK_KINDS = frozenset(
     {"feature", "bug", "contract-violation", "technical-debt"}
 )
-SOURCES = frozenset(
-    {"manual", "github", "jira", "ci", "repository", "code-analysis"}
-)
-FEATURE_SOURCES = frozenset({"manual", "github", "jira"})
 STATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -66,8 +59,6 @@ TERMINAL_STATUSES = frozenset(
         "invalid-candidate",
         "budget-exhausted",
         "pr-ready",
-        "publish-blocked",
-        "publish-uncertain",
         "pr-opened",
     }
 )
@@ -109,12 +100,6 @@ class RunResult:
     allowed: bool
     errors: tuple[str, ...]
     state: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class DiscoveryResult:
-    records: tuple[Mapping[str, Any], ...]
-    errors: tuple[str, ...]
 
 
 def _non_empty_string(
@@ -159,28 +144,15 @@ def validate_candidate(value: Any) -> CandidateValidation:
     _non_empty_string(value.get("title"), "candidate title", errors)
     _non_empty_string(value.get("problem"), "candidate problem", errors)
     evidence = _string_list(value.get("evidence"), "candidate evidence", errors)
-    labels = _string_list(value.get("labels"), "candidate labels", errors)
+    _string_list(value.get("labels"), "candidate labels", errors)
+    _non_empty_string(value.get("request"), "user request", errors)
 
     if kind is not None and kind not in WORK_KINDS:
         errors.append(f"unsupported candidate kind: {kind}")
-    if source is not None and source not in SOURCES:
-        errors.append(f"unsupported candidate source: {source}")
+    if source is not None and source != "manual":
+        errors.append("candidate source must be manual")
     if not evidence:
         errors.append("candidate evidence must be non-empty")
-
-    if kind == "feature":
-        if source not in FEATURE_SOURCES:
-            errors.append("product features require manual, GitHub, or Jira evidence")
-        if source == "manual":
-            _non_empty_string(
-                value.get("request"), "manual feature request", errors
-            )
-        elif source in {"github", "jira"} and "agent-ready" not in {
-            label.lower() for label in labels
-        }:
-            errors.append(
-                "GitHub and Jira product features require the agent-ready label"
-            )
 
     normalized = {
         field: value[field]
@@ -310,37 +282,11 @@ def start_run(
     task_dir: Path,
     candidate: Any,
     max_iterations: int = 3,
-    approved_records: Sequence[Mapping[str, Any]] = (),
 ) -> RunResult:
     validation = validate_candidate(candidate)
     if not validation.allowed:
         return RunResult(False, validation.errors, {})
     normalized_candidate = validation.candidate
-    if (
-        normalized_candidate.get("kind") == "feature"
-        and normalized_candidate.get("source") in {"github", "jira"}
-    ):
-        approved = any(
-            record.get("source") == normalized_candidate["source"]
-            and record.get("source_ref") == normalized_candidate["source_ref"]
-            and isinstance(record.get("labels"), list)
-            and "agent-ready"
-            in {
-                label.lower()
-                for label in record["labels"]
-                if isinstance(label, str)
-            }
-            for record in approved_records
-        )
-        if not approved:
-            return RunResult(
-                False,
-                (
-                    "external product feature is not present in live discovery "
-                    "with agent-ready",
-                ),
-                {},
-            )
     if (
         isinstance(max_iterations, bool)
         or not isinstance(max_iterations, int)
@@ -433,283 +379,6 @@ def terminate_run(task_dir: Path, status: str) -> RunResult:
     except OSError as exc:
         return RunResult(False, (f"cannot persist evolution state: {exc}",), loaded.state)
     return RunResult(True, (), state)
-
-
-def _run_discovery_command(
-    argv: list[str],
-    project_root: Path,
-    command_runner: Any,
-    label: str,
-    errors: list[str],
-) -> list[dict[str, Any]]:
-    try:
-        completed = command_runner(
-            argv,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        errors.append(f"{label} discovery could not start")
-        return []
-    if completed.returncode != 0:
-        errors.append(
-            f"{label} discovery failed with exit code {completed.returncode}"
-        )
-        return []
-    try:
-        value = json.loads(completed.stdout)
-    except (TypeError, json.JSONDecodeError):
-        errors.append(f"{label} discovery returned invalid JSON")
-        return []
-    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-        errors.append(f"{label} discovery must return a JSON array of objects")
-        return []
-    return value
-
-
-def _github_records(
-    project_root: Path, command_runner: Any, errors: list[str]
-) -> list[Mapping[str, Any]]:
-    records: list[Mapping[str, Any]] = []
-    issues = _run_discovery_command(
-        [
-            "gh",
-            "issue",
-            "list",
-            "--state",
-            "open",
-            "--label",
-            "agent-ready",
-            "--limit",
-            "50",
-            "--json",
-            "number,title,body,labels,url,updatedAt",
-        ],
-        project_root,
-        command_runner,
-        "GitHub issue",
-        errors,
-    )
-    for issue in issues:
-        labels_value = issue.get("labels", [])
-        labels = []
-        if isinstance(labels_value, list):
-            for label in labels_value:
-                if isinstance(label, dict) and isinstance(label.get("name"), str):
-                    labels.append(label["name"])
-                elif isinstance(label, str):
-                    labels.append(label)
-        title = issue.get("title")
-        url = issue.get("url")
-        if not isinstance(title, str) or not title.strip():
-            errors.append("GitHub issue discovery returned an invalid title")
-            continue
-        if not isinstance(url, str) or not url.strip():
-            errors.append("GitHub issue discovery returned an invalid URL")
-            continue
-        records.append(
-            {
-                "source": "github",
-                "source_ref": url,
-                "title": title,
-                "body": issue.get("body") if isinstance(issue.get("body"), str) else "",
-                "labels": labels,
-                "updated_at": (
-                    issue.get("updatedAt")
-                    if isinstance(issue.get("updatedAt"), str)
-                    else ""
-                ),
-            }
-        )
-
-    runs = _run_discovery_command(
-        [
-            "gh",
-            "run",
-            "list",
-            "--status",
-            "failure",
-            "--limit",
-            "20",
-            "--json",
-            "databaseId,displayTitle,conclusion,status,url,workflowName,updatedAt",
-        ],
-        project_root,
-        command_runner,
-        "GitHub CI",
-        errors,
-    )
-    for run in runs:
-        title = run.get("displayTitle")
-        url = run.get("url")
-        if not isinstance(title, str) or not title.strip():
-            errors.append("GitHub CI discovery returned an invalid title")
-            continue
-        if not isinstance(url, str) or not url.strip():
-            errors.append("GitHub CI discovery returned an invalid URL")
-            continue
-        records.append(
-            {
-                "source": "ci",
-                "source_ref": url,
-                "title": title,
-                "body": (
-                    f"workflow={run.get('workflowName', '')}; "
-                    f"status={run.get('status', '')}; "
-                    f"conclusion={run.get('conclusion', '')}"
-                ),
-                "labels": [],
-                "updated_at": (
-                    run.get("updatedAt")
-                    if isinstance(run.get("updatedAt"), str)
-                    else ""
-                ),
-            }
-        )
-    return records
-
-
-def _adf_text(value: Any) -> str:
-    text: list[str] = []
-
-    def visit(node: Any) -> None:
-        if isinstance(node, dict):
-            if node.get("type") == "text" and isinstance(node.get("text"), str):
-                text.append(node["text"])
-            for child in node.get("content", []):
-                visit(child)
-        elif isinstance(node, list):
-            for child in node:
-                visit(child)
-
-    if isinstance(value, str):
-        return value
-    visit(value)
-    return "\n".join(part for part in text if part)
-
-
-def _jira_records(
-    environment: Mapping[str, str], jira_opener: Any, errors: list[str]
-) -> list[Mapping[str, Any]]:
-    names = (
-        "AGENT_GATE_JIRA_BASE_URL",
-        "AGENT_GATE_JIRA_EMAIL",
-        "AGENT_GATE_JIRA_API_TOKEN",
-    )
-    configured = [bool(environment.get(name)) for name in names]
-    if not any(configured):
-        errors.append("Jira discovery is not configured")
-        return []
-    if not all(configured):
-        errors.append("Jira discovery configuration is incomplete")
-        return []
-
-    base_url = environment[names[0]].rstrip("/")
-    parsed = urlparse(base_url)
-    if (
-        parsed.scheme != "https"
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-        or not parsed.hostname
-        or not parsed.hostname.endswith(".atlassian.net")
-    ):
-        errors.append("Jira base URL must be an HTTPS atlassian.net site URL")
-        return []
-
-    credentials = (
-        f"{environment[names[1]]}:{environment[names[2]]}".encode("utf-8")
-    )
-    request = Request(
-        f"{base_url}/rest/api/3/search/jql",
-        data=json.dumps(
-            {
-                "jql": 'labels = "agent-ready" AND statusCategory != Done '
-                "ORDER BY updated DESC",
-                "maxResults": 50,
-                "fields": [
-                    "summary",
-                    "description",
-                    "labels",
-                    "issuetype",
-                    "status",
-                ],
-            }
-        ).encode("utf-8"),
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": (
-                "Basic " + base64.b64encode(credentials).decode("ascii")
-            ),
-        },
-        method="POST",
-    )
-    try:
-        with jira_opener(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
-        errors.append(f"Jira discovery failed with HTTP {exc.code}")
-        return []
-    except (URLError, TimeoutError, OSError):
-        errors.append("Jira discovery request failed")
-        return []
-    except (UnicodeError, json.JSONDecodeError):
-        errors.append("Jira discovery returned invalid JSON")
-        return []
-
-    if not isinstance(payload, dict) or not isinstance(payload.get("issues"), list):
-        errors.append("Jira discovery must return an issues array")
-        return []
-    records: list[Mapping[str, Any]] = []
-    for issue in payload["issues"]:
-        if not isinstance(issue, dict) or not isinstance(issue.get("fields"), dict):
-            errors.append("Jira discovery returned an invalid issue")
-            continue
-        key = issue.get("key")
-        fields = issue["fields"]
-        title = fields.get("summary")
-        if not isinstance(key, str) or not key.strip():
-            errors.append("Jira discovery returned an invalid issue key")
-            continue
-        if not isinstance(title, str) or not title.strip():
-            errors.append("Jira discovery returned an invalid summary")
-            continue
-        labels = fields.get("labels", [])
-        if not isinstance(labels, list) or any(
-            not isinstance(label, str) for label in labels
-        ):
-            errors.append(f"Jira issue {key} returned invalid labels")
-            continue
-        records.append(
-            {
-                "source": "jira",
-                "source_ref": f"{base_url}/browse/{key}",
-                "title": title,
-                "body": _adf_text(fields.get("description")),
-                "labels": labels,
-                "updated_at": "",
-            }
-        )
-    return records
-
-
-def discover_evidence(
-    project_root: Path,
-    environment: Optional[Mapping[str, str]] = None,
-    command_runner: Any = subprocess.run,
-    jira_opener: Any = urlopen,
-) -> DiscoveryResult:
-    root = Path(project_root).resolve(strict=True)
-    source_environment = os.environ if environment is None else environment
-    errors: list[str] = []
-    records = _github_records(root, command_runner, errors)
-    records.extend(_jira_records(source_environment, jira_opener, errors))
-    return DiscoveryResult(tuple(records), tuple(dict.fromkeys(errors)))
 
 
 def _validate_evaluation(
@@ -866,158 +535,51 @@ def evaluate_run(
     return terminate_run(task, verdict)
 
 
-def _command_receipt(
-    argv: list[str],
-    project_root: Path,
-    command_runner: Any,
-    label: str,
-) -> tuple[Optional[subprocess.CompletedProcess], tuple[str, ...]]:
-    try:
-        completed = command_runner(
-            argv,
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            timeout=60,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None, (f"{label} could not start",)
-    if completed.returncode != 0:
-        return completed, (
-            f"{label} failed with exit code {completed.returncode}",
-        )
-    return completed, ()
-
-
-def _publication_state(
-    task: Path,
-    original: Mapping[str, Any],
-    status: str,
-    pr_url: Optional[str] = None,
-) -> RunResult:
-    state = dict(original)
-    state["status"] = status
-    state["pr_url"] = pr_url
-    try:
-        _write_state(task, state)
-    except OSError as exc:
-        return RunResult(
-            False,
-            (f"cannot persist publication state: {exc}",),
-            original,
-        )
-    return RunResult(status == "pr-opened", (), state)
-
-
-def _pr_url(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
+def _recorded_pr_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str) or value != value.strip():
         return None
-    stripped = value.strip()
-    parsed = urlparse(stripped)
+    parsed = urlparse(value)
     if (
         parsed.scheme != "https"
         or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
         or not parsed.path
-        or "/pull/" not in parsed.path
+        or parsed.path == "/"
         or parsed.query
         or parsed.fragment
     ):
         return None
-    return stripped
+    return value
 
 
-def _pr_input(task: Path) -> tuple[Optional[str], Optional[Path], tuple[str, ...]]:
-    title_path = task / "pr-title.txt"
-    body_path = task / "pr-body.md"
-    if title_path.is_symlink() or body_path.is_symlink():
-        return None, None, ("PR title and body must not be symlinks",)
-    try:
-        title = title_path.read_text(encoding="utf-8").strip()
-        body = body_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeError) as exc:
-        return None, None, (f"cannot read PR title or body: {exc}",)
-    if not title or "\n" in title or len(title) > 256:
-        return None, None, ("PR title must be one non-empty line up to 256 characters",)
-    if not body.strip():
-        return None, None, ("PR body must be non-empty",)
-    return title, body_path, ()
-
-
-def publish_run(
-    task_dir: Path,
-    project_root: Path,
-    base_branch: str = "main",
-    command_runner: Any = subprocess.run,
+def record_pr(
+    task_dir: Path, project_root: Path, pr_url: Any
 ) -> RunResult:
     task = Path(task_dir)
-    root = Path(project_root).resolve(strict=True)
     loaded = _load_state(task)
     if not loaded.allowed:
         return loaded
-    if (
-        loaded.state["status"] == "pr-opened"
-        and _pr_url(loaded.state.get("pr_url")) is not None
-    ):
-        return RunResult(True, (), loaded.state)
+
+    recorded_url = _recorded_pr_url(pr_url)
+    if recorded_url is None:
+        return RunResult(
+            False, ("pull request receipt must be an absolute HTTPS URL",), loaded.state
+        )
+    if loaded.state["status"] == "pr-opened":
+        if loaded.state["pr_url"] == recorded_url:
+            return RunResult(True, (), loaded.state)
+        return RunResult(
+            False,
+            ("a different pull request receipt is already recorded",),
+            loaded.state,
+        )
     if loaded.state["status"] != "pr-ready":
         return RunResult(
             False, ("evolution run is not pr-ready",), loaded.state
         )
-    if (
-        not isinstance(base_branch, str)
-        or not base_branch
-        or base_branch.startswith("-")
-        or any(character.isspace() for character in base_branch)
-    ):
-        return RunResult(False, ("base branch is invalid",), loaded.state)
 
-    status, errors = _command_receipt(
-        ["git", "status", "--porcelain"], root, command_runner, "git status"
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert status is not None
-    if status.stdout.strip():
-        return RunResult(False, ("worktree must be clean",), loaded.state)
-
-    branch_receipt, errors = _command_receipt(
-        ["git", "branch", "--show-current"],
-        root,
-        command_runner,
-        "git branch",
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert branch_receipt is not None
-    branch = branch_receipt.stdout.strip()
-    if not branch or branch == base_branch:
-        return RunResult(
-            False,
-            ("publication requires a non-base named branch",),
-            loaded.state,
-        )
-    ahead, errors = _command_receipt(
-        ["git", "rev-list", "--count", f"{base_branch}..HEAD"],
-        root,
-        command_runner,
-        "git rev-list",
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert ahead is not None
-    try:
-        ahead_count = int(ahead.stdout.strip())
-    except ValueError:
-        return RunResult(
-            False, ("git rev-list returned an invalid count",), loaded.state
-        )
-    if ahead_count < 1:
-        return RunResult(
-            False, ("publication branch has no commits above base",), loaded.state
-        )
-
-    completion = validate_completion(task, root)
+    completion = validate_completion(task, Path(project_root))
     if not completion.allowed:
         return RunResult(
             False,
@@ -1025,108 +587,18 @@ def publish_run(
             + completion.errors,
             loaded.state,
         )
-    title, body_path, errors = _pr_input(task)
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert title is not None and body_path is not None
-
-    existing, errors = _command_receipt(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--state",
-            "all",
-            "--head",
-            branch,
-            "--base",
-            base_branch,
-            "--limit",
-            "2",
-            "--json",
-            "url,state,headRefName,baseRefName",
-        ],
-        root,
-        command_runner,
-        "GitHub PR lookup",
-    )
-    if errors:
-        return RunResult(False, errors, loaded.state)
-    assert existing is not None
+    state = dict(loaded.state)
+    state["status"] = "pr-opened"
+    state["pr_url"] = recorded_url
     try:
-        prs = json.loads(existing.stdout)
-    except json.JSONDecodeError:
-        return RunResult(
-            False, ("GitHub PR lookup returned invalid JSON",), loaded.state
-        )
-    if not isinstance(prs, list) or any(not isinstance(pr, dict) for pr in prs):
-        return RunResult(
-            False, ("GitHub PR lookup must return an array of objects",), loaded.state
-        )
-    exact = [
-        pr
-        for pr in prs
-        if pr.get("headRefName") == branch and pr.get("baseRefName") == base_branch
-    ]
-    if len(exact) > 1:
-        return RunResult(
-            False, ("multiple pull requests exist for the exact head and base",), loaded.state
-        )
-    if exact:
-        existing_url = _pr_url(exact[0].get("url"))
-        if existing_url is None:
-            return RunResult(
-                False, ("existing pull request has an invalid URL",), loaded.state
-            )
-        return _publication_state(task, loaded.state, "pr-opened", existing_url)
-
-    _, errors = _command_receipt(
-        ["git", "push", "--set-upstream", "origin", branch],
-        root,
-        command_runner,
-        "git push",
-    )
-    if errors:
-        blocked = _publication_state(
-            task, loaded.state, "publish-blocked"
-        )
-        return RunResult(False, errors, blocked.state)
-
-    created, errors = _command_receipt(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--base",
-            base_branch,
-            "--head",
-            branch,
-            "--title",
-            title,
-            "--body-file",
-            str(body_path),
-        ],
-        root,
-        command_runner,
-        "GitHub PR creation",
-    )
-    if errors:
-        blocked = _publication_state(
-            task, loaded.state, "publish-blocked"
-        )
-        return RunResult(False, errors, blocked.state)
-    assert created is not None
-    created_url = _pr_url(created.stdout)
-    if created_url is None:
-        uncertain = _publication_state(
-            task, loaded.state, "publish-uncertain"
-        )
+        _write_state(task, state)
+    except OSError as exc:
         return RunResult(
             False,
-            ("GitHub PR creation returned an invalid URL",),
-            uncertain.state,
+            (f"cannot persist pull request receipt: {exc}",),
+            loaded.state,
         )
-    return _publication_state(task, loaded.state, "pr-opened", created_url)
+    return RunResult(True, (), state)
 
 
 def _direct_task(
@@ -1188,10 +660,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
 
-    discover = subparsers.add_parser("discover")
-    discover.add_argument("--project-root", required=True, type=Path)
-    discover.add_argument("--json", action="store_true")
-
     start = subparsers.add_parser("start")
     start.add_argument("task", type=Path)
     start.add_argument("--candidate", required=True, type=Path)
@@ -1224,28 +692,13 @@ def main() -> int:
     status.add_argument("--project-root", required=True, type=Path)
     status.add_argument("--json", action="store_true")
 
-    publish = subparsers.add_parser("publish")
-    publish.add_argument("task", type=Path)
-    publish.add_argument("--project-root", required=True, type=Path)
-    publish.add_argument("--base-branch", default="main")
-    publish.add_argument("--json", action="store_true")
+    record_pr_parser = subparsers.add_parser("record-pr")
+    record_pr_parser.add_argument("task", type=Path)
+    record_pr_parser.add_argument("--project-root", required=True, type=Path)
+    record_pr_parser.add_argument("--url", required=True)
+    record_pr_parser.add_argument("--json", action="store_true")
 
     args = parser.parse_args()
-    if args.operation == "discover":
-        try:
-            result = discover_evidence(args.project_root)
-        except OSError as exc:
-            payload = {"allowed": False, "errors": [f"cannot discover evidence: {exc}"], "records": []}
-            _print_payload(payload, args.json)
-            return 1
-        payload = {
-            "allowed": True,
-            "errors": list(result.errors),
-            "records": [dict(record) for record in result.records],
-        }
-        _print_payload(payload, args.json)
-        return 0
-
     if args.operation == "status" and args.task is None:
         task, errors = _active_evolution_task(args.project_root)
         if task is None:
@@ -1267,19 +720,10 @@ def main() -> int:
         if errors:
             result = RunResult(False, errors, {})
         else:
-            validation = validate_candidate(candidate_value)
-            approved_records: Sequence[Mapping[str, Any]] = ()
-            if (
-                validation.allowed
-                and validation.candidate.get("kind") == "feature"
-                and validation.candidate.get("source") in {"github", "jira"}
-            ):
-                approved_records = discover_evidence(args.project_root).records
             result = start_run(
                 task,
                 candidate_value,
                 args.max_iterations,
-                approved_records=approved_records,
             )
     elif args.operation == "transition":
         result = transition_run(task, args.next_phase)
@@ -1294,12 +738,8 @@ def main() -> int:
         )
     elif args.operation == "terminate":
         result = terminate_run(task, args.status)
-    elif args.operation == "publish":
-        result = publish_run(
-            task,
-            args.project_root,
-            base_branch=args.base_branch,
-        )
+    elif args.operation == "record-pr":
+        result = record_pr(task, args.project_root, args.url)
     else:
         result = _load_state(task)
 
