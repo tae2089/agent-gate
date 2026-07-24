@@ -28,7 +28,8 @@ from loop_runtime import (
     terminate_managed_run,
     transition_managed_run,
 )
-from scenario_gate import validate_scenario_receipt
+from scenario_gate import source_fingerprint, validate_scenario_receipt
+from subloop_contract import PackProfile, validate_result
 
 REQUEST_SCHEMA_VERSION = 2
 ASSESSMENT_SCHEMA_VERSION = 1
@@ -121,7 +122,7 @@ RESEARCH_ADOPTION_DEFINITION = LoopDefinition(
     iteration_transitions=frozenset(),
     budget_terminal="blocked",
 )
-ACTIVE_RESEARCH_ADOPTION_FILENAME = ".active-research-adoption"
+ACTIVE_RESEARCH_ADOPTION_FILENAME = ".active-run"
 REQUEST_FILENAME = "research-request.json"
 STATE_FILENAME = "research-adoption-state.json"
 ASSESSMENT_FILENAME = "requirements-assessment.json"
@@ -137,6 +138,10 @@ RESEARCH_ADOPTION_RUN = ManagedLoopDefinition(
     input_hash_field="request_sha256",
     initial_status="frame",
     interrupt_terminals=frozenset({"needs-clarification", "blocked"}),
+)
+PACK_PROFILE = PackProfile(
+    name="research-adoption-loop",
+    supported_modes=frozenset({"standalone", "subloop"}),
 )
 
 
@@ -989,6 +994,146 @@ def export_evolution_candidate(
     return LoopResult(True, (), loaded.state)
 
 
+def build_subloop_result(
+    invocation: Mapping[str, Any],
+    artifact: Any,
+    *,
+    source_snapshot_after_sha256: str,
+) -> Mapping[str, Any]:
+    if (
+        not isinstance(invocation, dict)
+        or invocation.get("pack") != PACK_PROFILE.name
+        or invocation.get("mode") != "subloop"
+    ):
+        raise ValueError(
+            "Research Adoption Subloop requires a bound research invocation"
+        )
+    assessment = validate_requirements_assessment(artifact)
+    if assessment.allowed:
+        failed = [
+            name
+            for name, criterion in assessment.value["criteria"].items()
+            if criterion["status"] == "fail"
+        ]
+        if not failed:
+            raise ValueError(
+                "a passing requirements assessment is not a terminal "
+                "Research Adoption result"
+            )
+        findings = [
+            finding
+            for name in failed
+            for finding in assessment.value["criteria"][name]["findings"]
+        ]
+        status = "needs-decision"
+        summary = "Requirements Gate needs clarification: " + ", ".join(
+            sorted(failed)
+        )
+        finding_refs = [
+            f"requirements-assessment.json#{name}" for name in sorted(failed)
+        ]
+        evidence_refs = ["requirements-assessment.json"]
+        completion_receipt = None
+        decision = {
+            "question": "Clarify the failed requirements before research.",
+            "options": findings,
+        }
+    else:
+        brief = validate_adoption_brief(artifact)
+        if not brief.allowed:
+            errors = tuple(dict.fromkeys(assessment.errors + brief.errors))
+            raise ValueError("; ".join(errors))
+        value = brief.value
+        status = "completed"
+        summary = (
+            "Research supports adoption."
+            if value["verdict"] == "adopt"
+            else "Research rejects adoption."
+        )
+        finding_refs = [
+            f"adoption-brief.json#finding-{index + 1}"
+            for index, _ in enumerate(value["findings"])
+        ]
+        evidence_refs = [
+            ASSESSMENT_FILENAME,
+            EVIDENCE_GRADE_FILENAME,
+            ADOPTION_BRIEF_FILENAME,
+        ]
+        completion_receipt = {
+            "task_ref": invocation["completion_task_ref"],
+            "scenario_result_sha256": value["scenario_result_sha256"],
+        }
+        decision = None
+    return {
+        "schema_version": 1,
+        "invocation_id": invocation["invocation_id"],
+        "invocation_sha256": content_sha256(canonical_json(invocation)),
+        "pack": PACK_PROFILE.name,
+        "status": status,
+        "summary": summary,
+        "finding_refs": finding_refs,
+        "changed_paths": [],
+        "evidence_refs": evidence_refs,
+        "budget_usage": {"iterations_used": 1},
+        "completion_receipt": completion_receipt,
+        "decision": decision,
+        "source_snapshot_after_sha256": source_snapshot_after_sha256,
+    }
+
+
+def prepare_subloop_result(
+    task_dir: Path,
+    project_root: Path,
+    artifact: Any,
+) -> LoopResult:
+    task = Path(task_dir)
+    invocation, errors = _read_json_artifact(
+        task / "invocation.json",
+        "Research Adoption Subloop invocation",
+    )
+    if errors:
+        return LoopResult(False, errors, {})
+    fingerprint, fingerprint_errors = source_fingerprint(Path(project_root))
+    if fingerprint is None:
+        return LoopResult(False, fingerprint_errors, {})
+    try:
+        built = build_subloop_result(
+            invocation,
+            artifact,
+            source_snapshot_after_sha256=fingerprint,
+        )
+    except ValueError as exc:
+        return LoopResult(False, (str(exc),), {})
+    report_filename = (
+        ASSESSMENT_FILENAME
+        if validate_requirements_assessment(artifact).allowed
+        else ADOPTION_BRIEF_FILENAME
+    )
+    validation = validate_result(
+        built,
+        invocation,
+        current_source_snapshot_sha256=fingerprint,
+    )
+    if not validation.allowed:
+        return LoopResult(False, validation.errors, {})
+    for path, content, label in (
+        (
+            task / report_filename,
+            canonical_json(artifact),
+            "Research Adoption Subloop report",
+        ),
+        (
+            task / "result-input.json",
+            canonical_json(validation.value),
+            "Research Adoption Subloop result",
+        ),
+    ):
+        persist_errors = _persist_once_or_match(path, content, label)
+        if persist_errors:
+            return LoopResult(False, persist_errors, {})
+    return LoopResult(True, (), validation.value)
+
+
 def terminate_run(task_dir: Path, status: str) -> LoopResult:
     return terminate_managed_run(
         RESEARCH_ADOPTION_RUN,
@@ -1113,7 +1258,29 @@ def main() -> int:
     status.add_argument("--project-root", required=True, type=Path)
     status.add_argument("--json", action="store_true")
 
+    subloop = subparsers.add_parser("prepare-subloop-result")
+    subloop.add_argument("task", type=Path)
+    subloop.add_argument("--artifact", required=True, type=Path)
+    subloop.add_argument("--project-root", required=True, type=Path)
+    subloop.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
+    if args.operation == "prepare-subloop-result":
+        artifact, errors = _read_json_artifact(
+            args.artifact,
+            "Research Adoption Subloop artifact",
+        )
+        result = (
+            LoopResult(False, errors, {})
+            if errors
+            else prepare_subloop_result(
+                args.task,
+                args.project_root,
+                artifact,
+            )
+        )
+        _print_payload(result, args.json, args.task)
+        return 0 if result.allowed else 1
     if args.operation == "status" and args.task is None:
         task, errors = resolve_managed_run(
             RESEARCH_ADOPTION_RUN,

@@ -13,6 +13,9 @@ from typing import Any, Mapping, Optional
 from loop_engine import (
     LoopDefinition,
     LoopResult,
+    atomic_write,
+    canonical_json,
+    content_sha256,
     direct_workspace_task,
 )
 from loop_runtime import (
@@ -23,7 +26,8 @@ from loop_runtime import (
     terminate_managed_run,
     transition_managed_run,
 )
-from scenario_gate import validate_completion
+from scenario_gate import source_fingerprint, validate_completion
+from subloop_contract import PackProfile, validate_result
 
 FAILURE_SCHEMA_VERSION = 1
 FAILURE_FIELDS = frozenset(
@@ -57,7 +61,7 @@ CI_REPAIR_DEFINITION = LoopDefinition(
     iteration_transitions=frozenset({("verify", "repair")}),
     budget_terminal="budget-exhausted",
 )
-ACTIVE_CI_REPAIR_FILENAME = ".active-ci-repair"
+ACTIVE_CI_REPAIR_FILENAME = ".active-run"
 FAILURE_FILENAME = "ci-failure.json"
 STATE_FILENAME = "ci-repair-state.json"
 CI_REPAIR_RUN = ManagedLoopDefinition(
@@ -68,6 +72,31 @@ CI_REPAIR_RUN = ManagedLoopDefinition(
     input_hash_field="failure_sha256",
     initial_status="inspect",
     interrupt_terminals=frozenset({"needs-clarification", "blocked"}),
+)
+PACK_PROFILE = PackProfile(
+    name="ci-repair-loop",
+    supported_modes=frozenset({"standalone", "subloop"}),
+)
+SUBLOOP_OUTCOME_FIELDS = frozenset(
+    {
+        "status",
+        "summary",
+        "finding_refs",
+        "changed_paths",
+        "evidence_refs",
+        "iterations_used",
+        "scenario_result_sha256",
+        "decision",
+    }
+)
+SUBLOOP_OUTCOME_STATUSES = frozenset(
+    {
+        "checks-green",
+        "changes-requested",
+        "needs-decision",
+        "blocked",
+        "budget-exhausted",
+    }
 )
 
 
@@ -202,6 +231,129 @@ def terminate_run(task_dir: Path, status: str) -> LoopResult:
     return terminate_managed_run(CI_REPAIR_RUN, Path(task_dir), status)
 
 
+def build_subloop_result(
+    invocation: Mapping[str, Any],
+    outcome: Any,
+    *,
+    source_snapshot_after_sha256: str,
+) -> Mapping[str, Any]:
+    if (
+        not isinstance(invocation, dict)
+        or invocation.get("pack") != PACK_PROFILE.name
+        or invocation.get("mode") != "subloop"
+    ):
+        raise ValueError("CI Repair Subloop requires a bound CI invocation")
+    if not isinstance(outcome, dict):
+        raise ValueError("CI Repair Subloop outcome must be an object")
+    unknown = sorted(outcome.keys() - SUBLOOP_OUTCOME_FIELDS)
+    missing = sorted(SUBLOOP_OUTCOME_FIELDS - outcome.keys())
+    if unknown or missing:
+        details = []
+        if unknown:
+            details.append("unknown fields: " + ", ".join(unknown))
+        if missing:
+            details.append("missing fields: " + ", ".join(missing))
+        raise ValueError("CI Repair Subloop outcome " + "; ".join(details))
+    status = outcome["status"]
+    if status not in SUBLOOP_OUTCOME_STATUSES:
+        raise ValueError("CI Repair Subloop outcome status is unsupported")
+    mapped_status = "completed" if status == "checks-green" else status
+    scenario_sha = outcome["scenario_result_sha256"]
+    completion_receipt = (
+        {
+            "task_ref": invocation["completion_task_ref"],
+            "scenario_result_sha256": scenario_sha,
+        }
+        if status == "checks-green"
+        else None
+    )
+    return {
+        "schema_version": 1,
+        "invocation_id": invocation["invocation_id"],
+        "invocation_sha256": content_sha256(canonical_json(invocation)),
+        "pack": PACK_PROFILE.name,
+        "status": mapped_status,
+        "summary": outcome["summary"],
+        "finding_refs": outcome["finding_refs"],
+        "changed_paths": outcome["changed_paths"],
+        "evidence_refs": outcome["evidence_refs"],
+        "budget_usage": {"iterations_used": outcome["iterations_used"]},
+        "completion_receipt": completion_receipt,
+        "decision": outcome["decision"],
+        "source_snapshot_after_sha256": source_snapshot_after_sha256,
+    }
+
+
+def _persist_once_or_match(
+    path: Path,
+    content: bytes,
+    label: str,
+) -> tuple[str, ...]:
+    if path.is_symlink():
+        return (f"{label} must not be a symlink",)
+    try:
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        try:
+            atomic_write(path, content)
+        except OSError as exc:
+            return (f"cannot persist {label}: {exc}",)
+        return ()
+    except OSError as exc:
+        return (f"cannot read {label}: {exc}",)
+    if existing != content:
+        return (f"{label} already exists with different content",)
+    return ()
+
+
+def prepare_subloop_result(
+    task_dir: Path,
+    project_root: Path,
+    outcome: Any,
+) -> LoopResult:
+    task = Path(task_dir)
+    invocation, errors = _read_json_artifact(
+        task / "invocation.json",
+        "CI Repair Subloop invocation",
+    )
+    if errors:
+        return LoopResult(False, errors, {})
+    fingerprint, fingerprint_errors = source_fingerprint(Path(project_root))
+    if fingerprint is None:
+        return LoopResult(False, fingerprint_errors, {})
+    try:
+        result = build_subloop_result(
+            invocation,
+            outcome,
+            source_snapshot_after_sha256=fingerprint,
+        )
+    except ValueError as exc:
+        return LoopResult(False, (str(exc),), {})
+    validation = validate_result(
+        result,
+        invocation,
+        current_source_snapshot_sha256=fingerprint,
+    )
+    if not validation.allowed:
+        return LoopResult(False, validation.errors, {})
+    for path, content, label in (
+        (
+            task / "ci-repair-report.json",
+            canonical_json(outcome),
+            "CI Repair Subloop report",
+        ),
+        (
+            task / "result-input.json",
+            canonical_json(validation.value),
+            "CI Repair Subloop result",
+        ),
+    ):
+        persist_errors = _persist_once_or_match(path, content, label)
+        if persist_errors:
+            return LoopResult(False, persist_errors, {})
+    return LoopResult(True, (), validation.value)
+
+
 def _read_json_artifact(path: Path, label: str) -> tuple[Any, tuple[str, ...]]:
     if path.is_symlink():
         return None, (f"{label} must not be a symlink",)
@@ -277,7 +429,25 @@ def main() -> int:
     status.add_argument("--project-root", required=True, type=Path)
     status.add_argument("--json", action="store_true")
 
+    subloop = subparsers.add_parser("prepare-subloop-result")
+    subloop.add_argument("task", type=Path)
+    subloop.add_argument("--outcome", required=True, type=Path)
+    subloop.add_argument("--project-root", required=True, type=Path)
+    subloop.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
+    if args.operation == "prepare-subloop-result":
+        outcome, errors = _read_json_artifact(
+            args.outcome,
+            "CI Repair Subloop outcome",
+        )
+        result = (
+            LoopResult(False, errors, {})
+            if errors
+            else prepare_subloop_result(args.task, args.project_root, outcome)
+        )
+        _print_payload(result, args.json)
+        return 0 if result.allowed else 1
     if args.operation == "status" and args.task is None:
         task, errors = _active_ci_repair_task(args.project_root)
         result = (

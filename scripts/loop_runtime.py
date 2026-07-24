@@ -28,7 +28,7 @@ class ManagedLoopDefinition:
     loop: LoopDefinition
     input_filename: str
     state_filename: str
-    active_pointer_filename: str
+    active_pointer_filename: str | None
     input_hash_field: str
     initial_status: str
     interrupt_terminals: frozenset[str]
@@ -119,6 +119,8 @@ def resolve_managed_run(
     definition: ManagedLoopDefinition,
     project_root: Path,
 ) -> tuple[Path | None, tuple[str, ...]]:
+    if definition.active_pointer_filename is None:
+        return None, (f"{definition.loop.name} Subloop does not own a global pointer",)
     return resolve_active_run(
         Path(project_root),
         definition.active_pointer_filename,
@@ -132,6 +134,12 @@ def start_managed_run(
     input_value: Mapping[str, Any],
     max_iterations: int = 3,
 ) -> LoopResult:
+    if definition.active_pointer_filename is None:
+        return LoopResult(
+            False,
+            (f"{definition.loop.name} Subloop must attach to a parent invocation",),
+            {},
+        )
     if (
         isinstance(max_iterations, bool)
         or not isinstance(max_iterations, int)
@@ -218,6 +226,96 @@ def start_managed_run(
         return LoopResult(
             False,
             tuple(errors),
+            {},
+        )
+    return LoopResult(True, (), state)
+
+
+def attach_managed_subloop(
+    definition: ManagedLoopDefinition,
+    task_dir: Path,
+    project_root: Path,
+    max_iterations: int = 3,
+) -> LoopResult:
+    if definition.active_pointer_filename is not None:
+        return LoopResult(
+            False,
+            (f"{definition.loop.name} root run cannot attach as a Subloop",),
+            {},
+        )
+    if (
+        isinstance(max_iterations, bool)
+        or not isinstance(max_iterations, int)
+        or not 1 <= max_iterations <= 10
+    ):
+        return LoopResult(
+            False,
+            ("max_iterations must be an integer from 1 through 10",),
+            {},
+        )
+    try:
+        root = Path(project_root).resolve(strict=True)
+        candidate = Path(task_dir)
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        if candidate.is_symlink() or candidate.parent.is_symlink():
+            raise ValueError("Subloop task must not contain symlinks")
+        task = candidate.resolve(strict=True)
+        relative = task.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        return LoopResult(
+            False,
+            (f"cannot resolve nested Subloop task: {exc}",),
+            {},
+        )
+    if (
+        len(relative.parts) != 4
+        or relative.parts[0] != "_workspace"
+        or relative.parts[2] != "subloops"
+        or not relative.parts[1]
+        or not relative.parts[3]
+        or not task.is_dir()
+    ):
+        return LoopResult(
+            False,
+            ("Subloop task must be nested under _workspace/<root>/subloops/<id>",),
+            {},
+        )
+    input_path = task / definition.input_filename
+    state_path = task / definition.state_filename
+    if input_path.is_symlink():
+        return LoopResult(
+            False,
+            (f"{definition.loop.name} input must not be a symlink",),
+            {},
+        )
+    try:
+        input_content = input_path.read_bytes()
+    except OSError as exc:
+        return LoopResult(
+            False,
+            (f"cannot read {definition.loop.name} input: {exc}",),
+            {},
+        )
+    if state_path.exists() or state_path.is_symlink():
+        return LoopResult(
+            False,
+            (f"{definition.loop.name} state already exists",),
+            {},
+        )
+    state = {
+        "schema_version": STATE_SCHEMA_VERSION,
+        "status": definition.initial_status,
+        "iteration": 1,
+        "max_iterations": max_iterations,
+        definition.input_hash_field: content_sha256(input_content),
+    }
+    try:
+        _write_state(definition, task, state)
+    except OSError as exc:
+        return LoopResult(
+            False,
+            (f"cannot attach {definition.loop.name} Subloop: {exc}",),
             {},
         )
     return LoopResult(True, (), state)

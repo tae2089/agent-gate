@@ -19,6 +19,7 @@ from gate_helpers import IMPLEMENTATION, TASK, init_git_project  # noqa: E402
 import evolution_loop  # noqa: E402
 import research_adoption_loop  # noqa: E402
 import scenario_gate  # noqa: E402
+from subloop_contract import validate_result  # noqa: E402
 
 REQUIREMENT_NAMES = (
     "atomicity",
@@ -405,10 +406,21 @@ class ResearchAdoptionRunTest(unittest.TestCase):
     def test_start_persists_frame_with_one_non_scored_pass(self):
         result = research_adoption_loop.start_run(self.task, request())
 
+        self.assertTrue(
+            research_adoption_loop.PACK_PROFILE.supports("standalone")
+        )
+        self.assertTrue(research_adoption_loop.PACK_PROFILE.supports("subloop"))
         self.assertTrue(result.allowed, result.errors)
         self.assertEqual(result.state["status"], "frame")
         self.assertEqual(result.state["max_iterations"], 1)
         self.assertTrue((self.task / "research-request.json").is_file())
+        self.assertEqual(
+            (self.task.parent / ".active-run").read_text(encoding="utf-8"),
+            "_workspace/research-adoption\n",
+        )
+        self.assertFalse(
+            (self.task.parent / ".active-research-adoption").exists()
+        )
 
     def test_failed_requirements_gate_stops_before_research(self):
         self.start_gate()
@@ -609,6 +621,51 @@ class ResearchAdoptionRunTest(unittest.TestCase):
         payload = json.loads(status.stdout)
         self.assertEqual(payload["state"]["status"], "frame")
         self.assertEqual(payload["task"], str(self.task.resolve()))
+
+    def test_failed_requirements_gate_maps_to_needs_decision_subloop_result(self):
+        invocation = {
+            "schema_version": 1,
+            "invocation_id": "subloop-001",
+            "pack": "research-adoption-loop",
+            "mode": "subloop",
+            "parent": {
+                "run_id": "evolution-001",
+                "task_ref": "_workspace/research-adoption",
+                "state_sha256": "a" * 64,
+            },
+            "objective": "Determine whether to adopt the candidate.",
+            "requirements": ["AC-RESEARCH-1"],
+            "scope": ["."],
+            "source_snapshot": {
+                "ref": "subloops/subloop-001/source-snapshot.json",
+                "sha256": "b" * 64,
+            },
+            "permissions": [
+                "read-repository",
+                "read-external-sources",
+                "run-local-verification",
+            ],
+            "budget": {"iteration_limit": 1},
+            "completion_task_ref": "_workspace/research-adoption",
+        }
+        artifact = requirements_assessment(
+            "d" * 64,
+            failed="clarity",
+        )
+        result = research_adoption_loop.build_subloop_result(
+            invocation,
+            artifact,
+            source_snapshot_after_sha256="c" * 64,
+        )
+
+        validated = validate_result(
+            result,
+            invocation,
+            current_source_snapshot_sha256="c" * 64,
+        )
+
+        self.assertEqual(result["status"], "needs-decision")
+        self.assertTrue(validated.allowed, validated.errors)
 
 
 if __name__ == "__main__":
