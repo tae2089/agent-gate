@@ -615,13 +615,13 @@ def _stored_results(
     return by_id, valid
 
 
-def validate_completion(
+def _validate_current_result(
     task_dir: Path | str, project_root: Path | str
-) -> ScenarioGateResult:
+) -> tuple[ScenarioGateResult, dict[str, dict[str, Any]]]:
     root = Path(project_root).resolve(strict=True)
     design, design_errors = _resolve_design(task_dir, root)
     if design is None:
-        return ScenarioGateResult(False, design_errors, ())
+        return ScenarioGateResult(False, design_errors, ()), {}
     required = tuple(scenario["id"] for scenario in design.scenarios)
     errors: list[str] = []
     loaded = _load_json(design.task_dir / RESULT_FILENAME, RESULT_FILENAME, errors)
@@ -653,22 +653,51 @@ def validate_completion(
         if item.get("status") == "passed"
     }
     completed = passed if items_valid else set()
-    for scenario_id in required:
-        if scenario_id not in completed:
-            errors.append(f"required scenario did not pass: {scenario_id}")
     percentage = round((len(completed) / len(required)) * 100, 2) if required else 0.0
-    if percentage != 100.0:
-        errors.append(f"scenario trace completeness must be 100%, got {percentage:.2f}%")
     trace = ScenarioTraceCompleteness(
         len(required),
         len(completed),
         percentage,
         current,
     )
+    return (
+        ScenarioGateResult(
+            not errors,
+            tuple(dict.fromkeys(errors)),
+            required,
+            trace,
+        ),
+        by_id,
+    )
+
+
+def validate_current_result(
+    task_dir: Path | str, project_root: Path | str
+) -> ScenarioGateResult:
+    result, _ = _validate_current_result(task_dir, project_root)
+    return result
+
+
+def validate_completion(
+    task_dir: Path | str, project_root: Path | str
+) -> ScenarioGateResult:
+    current, by_id = _validate_current_result(task_dir, project_root)
+    errors = list(current.errors)
+    for scenario_id in current.required_scenarios:
+        item = by_id.get(scenario_id, {})
+        if item.get("status") != "passed":
+            errors.append(f"required scenario did not pass: {scenario_id}")
+    trace = current.trace_completeness
+    if trace is None or trace.percentage != 100.0:
+        percentage = trace.percentage if trace is not None else 0.0
+        errors.append(
+            "scenario trace completeness must be 100%, "
+            f"got {percentage:.2f}%"
+        )
     return ScenarioGateResult(
         not errors,
         tuple(dict.fromkeys(errors)),
-        required,
+        current.required_scenarios,
         trace,
     )
 

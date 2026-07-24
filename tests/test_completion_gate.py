@@ -17,7 +17,11 @@ SCRIPT = ROOT / "scripts" / "scenario_gate.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import scenario_gate  # noqa: E402
-from scenario_gate import run_scenarios, validate_completion  # noqa: E402
+from scenario_gate import (  # noqa: E402
+    run_scenarios,
+    validate_completion,
+    validate_current_result,
+)
 
 
 class CompletionGateTest(unittest.TestCase):
@@ -64,6 +68,17 @@ class CompletionGateTest(unittest.TestCase):
         self.assertEqual(result.trace_completeness.percentage, 100.0)
         self.assertTrue(result.trace_completeness.current)
 
+    def test_current_result_reports_a_missing_design(self):
+        missing = self.project / "_workspace" / "missing"
+
+        result = validate_current_result(missing, self.project)
+
+        self.assertFalse(result.allowed)
+        self.assertIn(
+            "task must be inside the project _workspace",
+            " ".join(result.errors),
+        )
+
     def test_scenario_argv_runs_from_project_root_without_shell(self):
         contract_path = self.task / "scenario-contract.json"
         contract = json.loads(contract_path.read_text(encoding="utf-8"))
@@ -102,6 +117,26 @@ class CompletionGateTest(unittest.TestCase):
         assert result.trace_completeness is not None
         self.assertEqual(result.trace_completeness.percentage, 0.0)
 
+    def test_current_result_accepts_failed_scenarios_without_claiming_completion(self):
+        contract_path = self.task / "scenario-contract.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["scenarios"][0]["command"] = [
+            sys.executable,
+            "-c",
+            "raise SystemExit(7)",
+        ]
+        contract_path.write_text(json.dumps(contract), encoding="utf-8")
+        self.assertTrue(run_scenarios(self.task, self.project).result_written)
+
+        current = validate_current_result(self.task, self.project)
+        completion = validate_completion(self.task, self.project)
+
+        self.assertTrue(current.allowed, current.errors)
+        assert current.trace_completeness is not None
+        self.assertTrue(current.trace_completeness.current)
+        self.assertEqual(current.trace_completeness.percentage, 0.0)
+        self.assertFalse(completion.allowed)
+
     def test_source_change_makes_previous_result_stale(self):
         self.assertTrue(run_scenarios(self.task, self.project).result_written)
         (self.project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
@@ -114,6 +149,10 @@ class CompletionGateTest(unittest.TestCase):
         self.assertEqual(result.trace_completeness.passed, 1)
         self.assertEqual(result.trace_completeness.percentage, 100.0)
         self.assertFalse(result.trace_completeness.current)
+
+        current = validate_current_result(self.task, self.project)
+        self.assertFalse(current.allowed)
+        self.assertIn("scenario result source_fingerprint is stale", current.errors)
 
     def test_design_change_makes_previous_result_stale(self):
         cases = (

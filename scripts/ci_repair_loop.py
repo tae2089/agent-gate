@@ -13,17 +13,19 @@ from typing import Any, Mapping, Optional
 from loop_engine import (
     LoopDefinition,
     LoopResult,
-    atomic_write,
-    canonical_json,
-    content_sha256,
     direct_workspace_task,
-    resolve_active_run,
-    transition,
+)
+from loop_runtime import (
+    ManagedLoopDefinition,
+    load_managed_run,
+    resolve_managed_run,
+    start_managed_run,
+    terminate_managed_run,
+    transition_managed_run,
 )
 from scenario_gate import validate_completion
 
 FAILURE_SCHEMA_VERSION = 1
-STATE_SCHEMA_VERSION = 1
 FAILURE_FIELDS = frozenset(
     {
         "schema_version",
@@ -33,15 +35,6 @@ FAILURE_FIELDS = frozenset(
         "failing_checks",
         "evidence",
         "request",
-    }
-)
-STATE_FIELDS = frozenset(
-    {
-        "schema_version",
-        "status",
-        "iteration",
-        "max_iterations",
-        "failure_sha256",
     }
 )
 PHASE_TRANSITIONS = {
@@ -67,6 +60,15 @@ CI_REPAIR_DEFINITION = LoopDefinition(
 ACTIVE_CI_REPAIR_FILENAME = ".active-ci-repair"
 FAILURE_FILENAME = "ci-failure.json"
 STATE_FILENAME = "ci-repair-state.json"
+CI_REPAIR_RUN = ManagedLoopDefinition(
+    loop=CI_REPAIR_DEFINITION,
+    input_filename=FAILURE_FILENAME,
+    state_filename=STATE_FILENAME,
+    active_pointer_filename=ACTIVE_CI_REPAIR_FILENAME,
+    input_hash_field="failure_sha256",
+    initial_status="inspect",
+    interrupt_terminals=frozenset({"needs-clarification", "blocked"}),
+)
 
 
 @dataclass(frozen=True)
@@ -131,82 +133,10 @@ def validate_failure(value: Any) -> FailureValidation:
     )
 
 
-def _write_state(task_dir: Path, state: Mapping[str, Any]) -> None:
-    atomic_write(task_dir / STATE_FILENAME, canonical_json(state))
-
-
-def _load_state(task_dir: Path) -> LoopResult:
-    path = task_dir / STATE_FILENAME
-    if path.is_symlink():
-        return LoopResult(False, ("CI repair state must not be a symlink",), {})
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return LoopResult(False, (f"cannot read CI repair state: {exc}",), {})
-    if not isinstance(value, dict):
-        return LoopResult(False, ("CI repair state must be an object",), {})
-
-    errors: list[str] = []
-    unknown = sorted(value.keys() - STATE_FIELDS)
-    missing = sorted(STATE_FIELDS - value.keys())
-    if unknown:
-        errors.append(
-            f"CI repair state has unknown fields: {', '.join(unknown)}"
-        )
-    if missing:
-        errors.append(
-            f"CI repair state is missing fields: {', '.join(missing)}"
-        )
-    if value.get("schema_version") != STATE_SCHEMA_VERSION:
-        errors.append(
-            f"CI repair state schema_version must be {STATE_SCHEMA_VERSION}"
-        )
-    if value.get("status") not in set(PHASE_TRANSITIONS) | TERMINAL_STATUSES:
-        errors.append(f"unsupported CI repair status: {value.get('status')}")
-    iteration = value.get("iteration")
-    max_iterations = value.get("max_iterations")
-    if (
-        isinstance(iteration, bool)
-        or not isinstance(iteration, int)
-        or iteration < 1
-    ):
-        errors.append("CI repair state iteration must be a positive integer")
-    if (
-        isinstance(max_iterations, bool)
-        or not isinstance(max_iterations, int)
-        or not 1 <= max_iterations <= 10
-    ):
-        errors.append(
-            "CI repair state max_iterations must be from 1 through 10"
-        )
-    if (
-        isinstance(iteration, int)
-        and not isinstance(iteration, bool)
-        and isinstance(max_iterations, int)
-        and not isinstance(max_iterations, bool)
-        and iteration > max_iterations
-    ):
-        errors.append("CI repair state iteration exceeds max_iterations")
-    failure_hash = value.get("failure_sha256")
-    if (
-        not isinstance(failure_hash, str)
-        or len(failure_hash) != 64
-        or any(character not in "0123456789abcdef" for character in failure_hash)
-    ):
-        errors.append(
-            "CI repair state failure_sha256 must be a lowercase SHA-256"
-        )
-    return LoopResult(not errors, tuple(errors), value)
-
-
 def _active_ci_repair_task(
     project_root: Path,
 ) -> tuple[Path | None, tuple[str, ...]]:
-    return resolve_active_run(
-        project_root,
-        ACTIVE_CI_REPAIR_FILENAME,
-        "CI repair",
-    )
+    return resolve_managed_run(CI_REPAIR_RUN, project_root)
 
 
 def start_run(
@@ -217,68 +147,12 @@ def start_run(
     validation = validate_failure(failure)
     if not validation.allowed:
         return LoopResult(False, validation.errors, {})
-    if (
-        isinstance(max_iterations, bool)
-        or not isinstance(max_iterations, int)
-        or not 1 <= max_iterations <= 10
-    ):
-        return LoopResult(
-            False,
-            ("max_iterations must be an integer from 1 through 10",),
-            {},
-        )
-    task = Path(task_dir)
-    if not task.is_dir() or task.is_symlink():
-        return LoopResult(
-            False,
-            ("task directory must be a real directory",),
-            {},
-        )
-    if task.parent.name != "_workspace":
-        return LoopResult(
-            False,
-            ("task must be a direct _workspace task",),
-            {},
-        )
-    state_path = task / STATE_FILENAME
-    if state_path.exists() or state_path.is_symlink():
-        return LoopResult(False, ("CI repair state already exists",), {})
-
-    root = task.parent.parent.resolve(strict=True)
-    pointer = task.parent / ACTIVE_CI_REPAIR_FILENAME
-    if pointer.exists() or pointer.is_symlink():
-        active_task, active_errors = _active_ci_repair_task(root)
-        if active_task is None:
-            return LoopResult(False, active_errors, {})
-        active = _load_state(active_task)
-        if not active.allowed:
-            return active
-        if active.state["status"] in set(PHASE_TRANSITIONS):
-            return LoopResult(
-                False,
-                ("another CI repair run is active",),
-                active.state,
-            )
-
-    failure_content = canonical_json(validation.failure)
-    state = {
-        "schema_version": STATE_SCHEMA_VERSION,
-        "status": "inspect",
-        "iteration": 1,
-        "max_iterations": max_iterations,
-        "failure_sha256": content_sha256(failure_content),
-    }
-    try:
-        atomic_write(task / FAILURE_FILENAME, failure_content)
-        _write_state(task, state)
-        relative = task.resolve(strict=True).relative_to(root)
-        atomic_write(
-            pointer,
-            (relative.as_posix() + "\n").encode("utf-8"),
-        )
-    except OSError as exc:
-        return LoopResult(False, (f"cannot start CI repair run: {exc}",), {})
-    return LoopResult(True, (), state)
+    return start_managed_run(
+        CI_REPAIR_RUN,
+        Path(task_dir),
+        validation.failure,
+        max_iterations,
+    )
 
 
 def _persist_transition(
@@ -287,7 +161,7 @@ def _persist_transition(
     *,
     completion_authorized: bool = False,
 ) -> LoopResult:
-    loaded = _load_state(task_dir)
+    loaded = load_managed_run(CI_REPAIR_RUN, task_dir)
     if not loaded.allowed:
         return loaded
     if next_phase == "checks-green" and not completion_authorized:
@@ -296,18 +170,7 @@ def _persist_transition(
             ("checks-green requires current Completion evidence",),
             loaded.state,
         )
-    decision = transition(CI_REPAIR_DEFINITION, loaded.state, next_phase)
-    if not decision.allowed:
-        return decision
-    try:
-        _write_state(task_dir, decision.state)
-    except OSError as exc:
-        return LoopResult(
-            False,
-            (f"cannot persist CI repair state: {exc}",),
-            loaded.state,
-        )
-    return decision
+    return transition_managed_run(CI_REPAIR_RUN, task_dir, next_phase)
 
 
 def transition_run(task_dir: Path, next_phase: str) -> LoopResult:
@@ -316,7 +179,7 @@ def transition_run(task_dir: Path, next_phase: str) -> LoopResult:
 
 def complete_run(task_dir: Path, project_root: Path) -> LoopResult:
     task = Path(task_dir)
-    loaded = _load_state(task)
+    loaded = load_managed_run(CI_REPAIR_RUN, task)
     if not loaded.allowed:
         return loaded
     if loaded.state["status"] != "verify":
@@ -336,33 +199,7 @@ def complete_run(task_dir: Path, project_root: Path) -> LoopResult:
 
 
 def terminate_run(task_dir: Path, status: str) -> LoopResult:
-    task = Path(task_dir)
-    loaded = _load_state(task)
-    if not loaded.allowed:
-        return loaded
-    state = dict(loaded.state)
-    if state["status"] not in PHASE_TRANSITIONS:
-        return LoopResult(
-            False,
-            ("CI repair run is already terminal",),
-            state,
-        )
-    if status not in {"needs-clarification", "blocked"}:
-        return LoopResult(
-            False,
-            (f"unsupported CI repair terminal status: {status}",),
-            state,
-        )
-    state["status"] = status
-    try:
-        _write_state(task, state)
-    except OSError as exc:
-        return LoopResult(
-            False,
-            (f"cannot persist CI repair state: {exc}",),
-            loaded.state,
-        )
-    return LoopResult(True, (), state)
+    return terminate_managed_run(CI_REPAIR_RUN, Path(task_dir), status)
 
 
 def _read_json_artifact(path: Path, label: str) -> tuple[Any, tuple[str, ...]]:
@@ -446,7 +283,7 @@ def main() -> int:
         result = (
             LoopResult(False, errors, {})
             if task is None
-            else _load_state(task)
+            else load_managed_run(CI_REPAIR_RUN, task)
         )
         _print_payload(result, args.json)
         return 0 if result.allowed else 1
@@ -471,7 +308,7 @@ def main() -> int:
     elif args.operation == "terminate":
         result = terminate_run(task, args.status)
     else:
-        result = _load_state(task)
+        result = load_managed_run(CI_REPAIR_RUN, task)
 
     _print_payload(result, args.json)
     return 0 if result.allowed else 1
