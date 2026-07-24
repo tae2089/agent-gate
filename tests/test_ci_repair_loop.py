@@ -17,6 +17,7 @@ from gate_helpers import IMPLEMENTATION, TASK, init_git_project  # noqa: E402
 
 import ci_repair_loop  # noqa: E402
 import scenario_gate  # noqa: E402
+from subloop_contract import validate_result  # noqa: E402
 
 
 def failure(**overrides):
@@ -115,14 +116,17 @@ class CIRepairRunTest(unittest.TestCase):
     def test_start_persists_inspect_state_and_failure_hash(self):
         result = self.start()
 
+        self.assertTrue(ci_repair_loop.PACK_PROFILE.supports("standalone"))
+        self.assertTrue(ci_repair_loop.PACK_PROFILE.supports("subloop"))
         self.assertEqual(result.state["status"], "inspect")
         self.assertEqual(result.state["iteration"], 1)
         self.assertEqual(len(result.state["failure_sha256"]), 64)
         self.assertTrue((self.task / "ci-failure.json").is_file())
         self.assertEqual(
-            (self.task.parent / ".active-ci-repair").read_text(encoding="utf-8"),
+            (self.task.parent / ".active-run").read_text(encoding="utf-8"),
             "_workspace/ci-repair\n",
         )
+        self.assertFalse((self.task.parent / ".active-ci-repair").exists())
 
     def test_only_one_ci_repair_run_is_active_per_worktree(self):
         self.start()
@@ -226,6 +230,56 @@ class CIRepairRunTest(unittest.TestCase):
         self.assertEqual(started.returncode, 0, started.stderr)
         self.assertEqual(status.returncode, 0, status.stderr)
         self.assertEqual(json.loads(status.stdout)["state"]["status"], "inspect")
+
+    def test_checks_green_maps_to_common_completed_subloop_result(self):
+        invocation = {
+            "schema_version": 1,
+            "invocation_id": "subloop-001",
+            "pack": "ci-repair-loop",
+            "mode": "subloop",
+            "parent": {
+                "run_id": "evolution-001",
+                "task_ref": "_workspace/ci-repair",
+                "state_sha256": "a" * 64,
+            },
+            "objective": "Repair the unit-test check.",
+            "requirements": ["AC-CI-1"],
+            "scope": ["src", "tests"],
+            "source_snapshot": {
+                "ref": "subloops/subloop-001/source-snapshot.json",
+                "sha256": "b" * 64,
+            },
+            "permissions": [
+                "read-repository",
+                "modify-worktree",
+                "run-local-verification",
+            ],
+            "budget": {"iteration_limit": 2},
+            "completion_task_ref": "_workspace/ci-repair",
+        }
+        result = ci_repair_loop.build_subloop_result(
+            invocation,
+            {
+                "status": "checks-green",
+                "summary": "The requested CI checks pass locally.",
+                "finding_refs": [],
+                "changed_paths": ["src/app.txt"],
+                "evidence_refs": ["ci-repair-report.json"],
+                "iterations_used": 1,
+                "scenario_result_sha256": "c" * 64,
+                "decision": None,
+            },
+            source_snapshot_after_sha256="d" * 64,
+        )
+
+        validated = validate_result(
+            result,
+            invocation,
+            current_source_snapshot_sha256="d" * 64,
+        )
+
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(validated.allowed, validated.errors)
 
 
 if __name__ == "__main__":
