@@ -1,4 +1,4 @@
 interface:
   display_name: "Debug Loop"
   short_description: "Diagnose and repair reproducible failures within a bounded loop"
-  default_prompt: "Diagnose the reported failure, prove the root cause, make only authorized local fixes, and verify the result."
+  default_prompt: "Use $debug-loop to diagnose the reported failure, prove the root cause, make only authorized local fixes, and verify the result."

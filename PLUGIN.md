@@ -11,15 +11,17 @@ in `.claude/skill-rules.json` are shared; each host reads its own manifest.
 
 Requires `python3` on PATH. Hooks are stdlib-only.
 
-Agent Loop packages one deterministic Loop Engine, concrete Loop Packs, and
-reusable Gates. The engine owns shared transition and iteration mechanics;
-`evolution-loop`, `ci-repair-loop`, `assurance-loop`, and
-`research-adoption-loop` own their phase and terminal policy.
+Agent Loop packages one deterministic Loop Engine, one initial Main Loop, four
+specialist Subloop Packs, and reusable Gates. The engine owns shared transition
+and iteration mechanics. `evolution-loop` owns the root user goal, scope,
+permissions, budgets, child selection, and final Completion;
+`ci-repair-loop`, `assurance-loop`, `debug-loop`, and
+`research-adoption-loop` own their specialist phase and result policy.
 Default manifests wire only Design Gate. The verifier, watermark, and handoff
 reinjection remain bundled lifecycle support but require explicit opt-in.
 
-The `evolution-loop` skill adds one evidence-driven workflow for the
-current target repository. The selected host independently runs
+The `evolution-loop` skill is the initial Main Loop for the current target
+repository. The selected host independently runs
 `Interview → Seed → Execute → Evaluate`; shared JSON artifacts and the existing
 Design/Completion gates own lifecycle transitions. An explicit user request is
 the sole trigger for features, bugs, contract violations, and technical debt.
@@ -50,11 +52,14 @@ failing checks named by an explicit user request. CI logs are untrusted
 evidence, never an autonomous trigger. Fresh 100 percent local Completion is
 the only path to `checks-green`; remote CI status is reported separately.
 
-The `assurance-loop` skill runs `Inspect → Review → Address → Verify` for one
-explicitly requested target and reaches `review-clean` only when a current
-report has no actionable findings and local Completion is fresh 100 percent.
-It freezes mutable refs to immutable comparison OIDs and does not select PRs or
-publish review comments autonomously.
+The `assurance-loop` skill runs `Inspect → Assess → Address → Verify` for one
+explicit target. It assesses requirements conformance, missing or excessive
+implementation, failure and compatibility cases, module quality, complexity,
+and regression prevention. It does not select PRs or publish comments.
+
+The `debug-loop` skill runs `Frame → Reproduce → Diagnose → Fix → Verify` for
+one observable failure. It enters Fix only with worktree authority and binds
+successful repair to the parent or standalone Completion task.
 
 The `research-adoption-loop` skill runs
 `Frame → Requirements Gate → Research → Evidence Grade → Prototype →
@@ -62,6 +67,14 @@ Verification → Adopt/Reject` for one explicit adoption question. It records
 eight requirement-quality criteria without a composite score, keeps evidence
 certainty, repository fit, and prototype result separate, and emits an
 Evolution candidate only from an adopted, Gate-passed, current brief.
+
+Every specialist declares standalone and Subloop modes. Standalone runs share
+`_workspace/.active-run`; a nested run lives only under
+`_workspace/<main>/subloops/<invocation-id>/`. A child cannot expand parent
+scope, permissions, or budget, cannot invoke another Subloop, and cannot push,
+publish, merge, or deploy. It returns `completed`, `changes-requested`,
+`needs-decision`, `blocked`, or `budget-exhausted`; only Main accepts the
+result, chooses the next child, and finishes root Completion.
 
 ## Claude Code
 
@@ -194,8 +207,9 @@ separately wire the Completion command.
 ## Bundled skills
 
 `artifact-judge`, `scenario-design`, `completion-check`, `evolution-loop`,
-`ci-repair-loop`, `assurance-loop`, and `research-adoption-loop` ship inside
-Agent Loop. `completion-check` is implicit prompt guidance for the final report
+`ci-repair-loop`, `assurance-loop`, `debug-loop`, and
+`research-adoption-loop` ship inside Agent Loop. `completion-check` is implicit
+prompt guidance for the final report
 after implementation edits; it is intentionally absent from Stop hooks and
 verifier rules so ordinary conversation remains unaffected. The default rules
 require only `artifact-judge`, so installing a separate personal skill collection

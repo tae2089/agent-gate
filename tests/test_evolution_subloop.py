@@ -176,6 +176,41 @@ class EvolutionSubloopTest(unittest.TestCase):
                 )
                 self.assertFalse(result.allowed)
 
+    def test_main_routes_all_four_specialist_packs_serially(self):
+        self.start(subloop_iterations=4)
+
+        for pack in (
+            "research-adoption-loop",
+            "debug-loop",
+            "ci-repair-loop",
+            "assurance-loop",
+        ):
+            with self.subTest(pack=pack):
+                profile = evolution_loop.MAIN_SUBLOOP_PROFILES[pack]
+                invoked = evolution_loop.invoke_subloop(
+                    self.task,
+                    self.project,
+                    subloop_request(
+                        pack=pack,
+                        budget={"iteration_limit": 1},
+                    ),
+                    profile,
+                )
+                self.assertTrue(invoked.allowed, invoked.errors)
+                accepted = evolution_loop.accept_subloop_result(
+                    self.task,
+                    self.project,
+                    self.accepted_result(
+                        pack=pack,
+                        summary=f"{pack} completed.",
+                    ),
+                )
+                self.assertTrue(accepted.allowed, accepted.errors)
+
+        final = evolution_loop.load_run(self.task)
+        self.assertEqual(final.state["subloop_iterations_remaining"], 0)
+        self.assertIsNone(final.state["active_subloop"])
+
     def test_accept_result_debits_budget_clears_child_and_is_immutable(self):
         self.start()
         self.assertTrue(

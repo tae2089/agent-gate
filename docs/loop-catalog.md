@@ -4,14 +4,25 @@ A Loop Pack is an iterative work policy with an explicit trigger, state graph,
 evidence contract, convergence condition, and bounded terminal policy. A
 one-shot validator, hook, or adapter is not a Loop Pack.
 
+## Execution roles
+
+`evolution-loop` is the initial Main Loop. It owns the root request,
+requirements, scope, permissions, budgets, phase, one active Subloop, and final
+Completion. Specialist Packs declare standalone and Subloop modes. Nested
+execution inherits a strict subset of Main authority and returns one of
+`completed`, `changes-requested`, `needs-decision`, `blocked`, or
+`budget-exhausted`; it cannot dispatch another child or perform external
+mutation.
+
 ## Implemented
 
-| Pack | Feedback signal | Convergence |
-| --- | --- | --- |
-| `evolution-loop` | executable scenarios plus scope evaluation | verified PR is ready or opened |
-| `ci-repair-loop` | repository-native reproductions of requested failing checks | fresh 100% Completion reaches `checks-green` |
-| `assurance-loop` | current source-bound actionable diff findings | no actionable findings remain and Completion is fresh 100% |
-| `research-adoption-loop` | eight-axis requirements Gate, ordinal evidence certainty, repository fit, and a preserved prototype result | a Gate-passed adoption brief records adopt/reject with fresh 100% Completion; only adopt can derive an Evolution candidate |
+| Pack | Role and modes | Feedback signal | Convergence |
+| --- | --- | --- | --- |
+| `evolution-loop` | Main; standalone | executable scenarios, accepted Subloop results, and scope evaluation | root Completion is current and the requested deliverable is ready |
+| `ci-repair-loop` | specialist; standalone/subloop | repository-native reproductions of requested failing checks | fresh 100% Completion reaches local `checks-green` |
+| `assurance-loop` | specialist; standalone/subloop | six source-bound requirements and quality assessments | every assessment passes, or actionable findings return to Main |
+| `debug-loop` | specialist; standalone/subloop | reproducible failure and causal evidence | root cause is evidenced and any authorized fix passes regression verification |
+| `research-adoption-loop` | specialist; standalone/subloop | eight-axis Requirements Gate, ordinal evidence certainty, repository fit, and a preserved prototype result | a Gate-passed brief records adopt/reject with fresh Completion; only adopt can derive an Evolution candidate |
 
 ## Candidates
 
