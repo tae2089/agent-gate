@@ -22,7 +22,7 @@ import scenario_gate  # noqa: E402
 
 def candidate(**overrides):
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": "bug",
         "source": "manual",
         "source_ref": "manual-request-2026-07-23",
@@ -31,6 +31,14 @@ def candidate(**overrides):
         "evidence": ["The user reported an observable failure."],
         "labels": [],
         "request": "재현 가능한 오류를 고쳐줘.",
+        "requirements": ["AC-1"],
+        "scope": ["src", "tests"],
+        "permissions": [
+            "read-repository",
+            "modify-worktree",
+            "run-local-verification",
+            "push",
+        ],
     }
     value.update(overrides)
     return value
@@ -104,7 +112,7 @@ class EvolutionStateTest(unittest.TestCase):
         self.assertEqual(state["max_iterations"], 3)
         self.assertEqual(len(state["candidate_sha256"]), 64)
         self.assertEqual(
-            (self.task.parent / ".active-evolution").read_text(encoding="utf-8"),
+            (self.task.parent / ".active-run").read_text(encoding="utf-8"),
             "_workspace/sample\n",
         )
 
@@ -562,14 +570,18 @@ class CommandLineTest(unittest.TestCase):
         self.assertEqual(
             json.loads(status.stdout)["state"],
             {
+                "active_subloop": None,
                 "candidate_sha256": json.loads(started.stdout)["state"][
                     "candidate_sha256"
                 ],
                 "iteration": 1,
+                "last_subloop_result_sha256": None,
                 "max_iterations": 2,
                 "pr_url": None,
-                "schema_version": 1,
+                "run_id": "sample",
+                "schema_version": 2,
                 "status": "execute",
+                "subloop_iterations_remaining": 3,
             },
         )
 
