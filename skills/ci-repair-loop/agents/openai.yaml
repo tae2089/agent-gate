@@ -1,0 +1,4 @@
+interface:
+  display_name: "CI Repair Loop"
+  short_description: "Repair requested CI failures with evidence gates"
+  default_prompt: "Use $ci-repair-loop to repair the CI checks I asked you to fix."

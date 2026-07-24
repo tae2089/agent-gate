@@ -1,10 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
-  "name": "agent-gate",
-  "description": "Structural design and executable completion gates with an optional evidence-driven evolutionary loop and lifecycle support.",
-  "version": "0.2.0",
+  "name": "agent-loop",
+  "description": "Deterministic loop engineering with evolution and CI repair packs, structural gates, and lifecycle support.",
+  "version": "0.3.0",
   "author": { "name": "tae2089" },
   "license": "MIT",
-  "keywords": ["hooks", "enforcement", "skills", "handoff", "guardrails", "evolution"],
+  "keywords": ["hooks", "enforcement", "skills", "guardrails", "loops", "evolution", "ci-repair"],
   "skills": "./.claude/skills/"
 }

@@ -78,7 +78,7 @@ def _run_hook(hook_input: dict, max_age_hours: float) -> int:
 
     write_marker(resolved, MARKER_NS, session_id, {"checkpoint": checkpoint})
     message = (
-        f"[agent-gate] Context was just compacted. The pre-compaction handoff below is the "
+        f"[agent-loop] Context was just compacted. The pre-compaction handoff below is the "
         f"authoritative record of in-progress work — trust it over the compaction summary, "
         f"especially user corrections and value judgments. Source: {handoff}\n\n{content}"
     )

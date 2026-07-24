@@ -17,7 +17,7 @@ WATERMARK = Path(__file__).resolve().parent.parent / "hooks" / "context_watermar
 GOOD_HANDOFF = """# handoff
 
 ## 목표
-agent-gate의 context watermark 보강
+Agent Loop의 context watermark 보강
 
 ## 완료 작업
 - hooks/context_watermark.py 수정

@@ -137,7 +137,7 @@ def _run_hook(hook_input: dict, window: int, threshold: float) -> int:
         else "Compaction is starting."
     )
     reason = (
-        f"[agent-gate] {usage}{lint_suffix} "
+        f"[agent-loop] {usage}{lint_suffix} "
         "Before finishing, write a handoff artifact so work survives compaction: "
         "create _workspace/<current-task>/handoff.md (or handoff.md in cwd if no task folder) "
         "covering: current goal, work completed with file paths, key decisions and why, "

@@ -1,12 +1,12 @@
 {
-  "agent-gate": {
+  "agent-loop": {
     "PreToolUse": [
       {
         "matcher": "write_to_file|replace_file_content|multi_replace_file_content",
         "hooks": [
           {
             "type": "command",
-            "command": "p=\"$HOME/.gemini/antigravity-cli/plugins/agent-gate\"; python3 \"$p/hooks/antigravity_adapter.py\" --event pretooluse -- python3 \"$p/hooks/design_gate_hook.py\""
+            "command": "p=\"$HOME/.gemini/antigravity-cli/plugins/agent-loop\"; python3 \"$p/hooks/antigravity_adapter.py\" --event pretooluse -- python3 \"$p/hooks/design_gate_hook.py\""
           }
         ]
       }

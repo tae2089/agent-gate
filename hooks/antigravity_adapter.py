@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Boundary shim so agent-gate hooks run under Google Antigravity unmodified.
+"""Boundary shim so Agent Loop hooks run under Google Antigravity unmodified.
 
 Antigravity command hooks speak a different contract than Claude Code / Codex
 (camelCase stdin, and a per-event decision key: PreToolUse blocks with
@@ -84,12 +84,12 @@ def emit(event: str, blocked: bool, reason: str | None) -> None:
     """Print the Antigravity verdict for this event (docs/hooks contract)."""
     if event == "pretooluse":
         if blocked:
-            print(json.dumps({"decision": "deny", "reason": reason or "blocked by agent-gate"}))
+            print(json.dumps({"decision": "deny", "reason": reason or "blocked by agent-loop"}))
         else:
             print(json.dumps({"decision": "allow"}))
     elif event == "stop":
         if blocked:
-            print(json.dumps({"decision": "continue", "reason": reason or "blocked by agent-gate"}))
+            print(json.dumps({"decision": "continue", "reason": reason or "blocked by agent-loop"}))
         else:
             print("{}")
 

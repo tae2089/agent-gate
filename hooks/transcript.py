@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared transcript parsing and hook I/O boundary for agent-gate hooks.
+"""Shared transcript parsing and hook I/O boundary for Agent Loop hooks.
 
 Transcript entries are Claude Code JSONL lines, or Codex CLI rollout lines
 ({payload, timestamp, type} envelopes) which parse_transcript normalizes into

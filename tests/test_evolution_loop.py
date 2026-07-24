@@ -829,7 +829,7 @@ class SkillPackagingTest(unittest.TestCase):
     def test_antigravity_plugin_has_root_skills_component(self):
         self.assertTrue((ROOT / "skills" / "evolution-loop" / "SKILL.md").is_file())
         manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
-        self.assertEqual(manifest["name"], "agent-gate")
+        self.assertEqual(manifest["name"], "agent-loop")
 
     def test_host_smoke_stays_inside_clone_and_never_bypasses_denied_writes(self):
         content = (
@@ -888,17 +888,17 @@ class SkillPackagingTest(unittest.TestCase):
         for content in (skill, docs, plugin_docs):
             normalized = " ".join(content.split())
             self.assertIn("target repository", normalized.lower())
-            self.assertIn("AGENT_GATE_ROOT", normalized)
+            self.assertIn("AGENT_LOOP_ROOT", normalized)
             self.assertIn("PROJECT_ROOT", normalized)
         self.assertIn(
-            "$AGENT_GATE_ROOT/scripts/evolution_loop.py", skill
+            "$AGENT_LOOP_ROOT/scripts/evolution_loop.py", skill
         )
-        self.assertIn("$AGENT_GATE_ROOT/scripts/scenario_gate.py", skill)
+        self.assertIn("$AGENT_LOOP_ROOT/scripts/scenario_gate.py", skill)
         self.assertNotIn("python3 scripts/evolution_loop.py", skill)
         self.assertNotIn("python3 scripts/scenario_gate.py", skill)
-        self.assertNotIn("Operate only in the `agent-gate` repository", skill)
+        self.assertNotIn("Operate only in the `agent-loop` repository", skill)
         self.assertNotIn(
-            "self-evolution of the `agent-gate` repository", skill
+            "self-evolution of the `agent-loop` repository", skill
         )
 
     def test_execute_uses_repository_native_verification(self):
@@ -934,7 +934,7 @@ class SkillPackagingTest(unittest.TestCase):
         ):
             with self.subTest(path=relative):
                 manifest = json.loads((ROOT / relative).read_text(encoding="utf-8"))
-                self.assertEqual(manifest["version"], "0.2.0")
+                self.assertEqual(manifest["version"], "0.3.0")
 
     def test_user_docs_define_evidence_terminals_and_no_merge_boundary(self):
         content = (
