@@ -57,10 +57,11 @@ It freezes mutable refs to immutable comparison OIDs and does not select PRs or
 publish review comments autonomously.
 
 The `research-adoption-loop` skill runs
-`Frame → Research → Prototype → Evaluate` for one explicit adoption question.
-It treats source content as untrusted evidence and records `adopted` or
-`rejected` only after preserving the bounded prototype result and reaching
-fresh 100 percent Completion.
+`Frame → Requirements Gate → Research → Evidence Grade → Prototype →
+Verification → Adopt/Reject` for one explicit adoption question. It records
+eight requirement-quality criteria without a composite score, keeps evidence
+certainty, repository fit, and prototype result separate, and emits an
+Evolution candidate only from an adopted, Gate-passed, current brief.
 
 ## Claude Code
 
