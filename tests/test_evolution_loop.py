@@ -162,6 +162,14 @@ class EvolutionStateTest(unittest.TestCase):
         self.assertEqual(result.state["status"], "execute")
         self.assertEqual(result.state["iteration"], 1)
 
+    def test_interrupted_main_releases_the_root_execution_pointer(self):
+        self.assertTrue(evolution_loop.start_run(self.task, self.candidate).allowed)
+
+        terminated = evolution_loop.terminate_run(self.task, "blocked")
+
+        self.assertTrue(terminated.allowed, terminated.errors)
+        self.assertFalse((self.task.parent / ".active-run").exists())
+
     def test_invalid_seed_returns_to_interview_and_consumes_iteration(self):
         self.assertTrue(
             evolution_loop.start_run(
@@ -444,6 +452,7 @@ class PullRequestReceiptTest(unittest.TestCase):
         state = json.loads(result.stdout)["state"]
         self.assertEqual(state["status"], "pr-opened")
         self.assertEqual(state["pr_url"], self.receipt_url)
+        self.assertFalse((self.task.parent / ".active-run").exists())
 
     def test_same_receipt_is_idempotent_but_a_different_receipt_conflicts(self):
         first = evolution_loop.record_pr(
@@ -843,15 +852,16 @@ class SkillPackagingTest(unittest.TestCase):
         manifest = json.loads((ROOT / "plugin.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest["name"], "agent-loop")
 
-    def test_host_smoke_stays_inside_clone_and_never_bypasses_denied_writes(self):
+    def test_main_never_bypasses_child_or_authority_boundaries(self):
         content = (
             ROOT / "skills" / "evolution-loop" / "SKILL.md"
         ).read_text(encoding="utf-8")
         normalized = " ".join(content.split())
 
-        self.assertIn("working directory inside the disposable clone", normalized)
-        self.assertIn("Never retry a denied write", normalized)
-        self.assertIn("terminate `blocked`", normalized)
+        self.assertIn("one active Subloop", normalized)
+        self.assertIn("cannot expand", normalized)
+        self.assertIn("or call another Subloop", normalized)
+        self.assertIn("only Main", normalized)
 
     def test_skill_and_docs_make_user_request_the_only_entrypoint(self):
         skill = (
@@ -917,13 +927,11 @@ class SkillPackagingTest(unittest.TestCase):
         skill = (
             ROOT / "skills" / "evolution-loop" / "SKILL.md"
         ).read_text(encoding="utf-8")
-        execute = skill.split("## Execute", 1)[1].split("## Evaluate", 1)[0]
-
-        self.assertIn("repository-native", execute)
-        self.assertIn("direct argv", execute)
-        self.assertIn("CI", execute)
-        self.assertNotIn("replay audit", execute)
-        self.assertNotIn("plugin validator", execute)
+        self.assertIn("repository-native", skill)
+        self.assertIn("direct argv", skill)
+        self.assertIn("CI", skill)
+        self.assertNotIn("replay audit", skill)
+        self.assertNotIn("plugin validator", skill)
 
     def test_public_metadata_describes_the_optional_evolution_loop(self):
         paths = (
@@ -946,7 +954,7 @@ class SkillPackagingTest(unittest.TestCase):
         ):
             with self.subTest(path=relative):
                 manifest = json.loads((ROOT / relative).read_text(encoding="utf-8"))
-                self.assertEqual(manifest["version"], "0.4.0")
+                self.assertEqual(manifest["version"], "0.5.0")
 
     def test_user_docs_define_evidence_terminals_and_no_merge_boundary(self):
         content = (

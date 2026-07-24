@@ -37,7 +37,7 @@ class AgentLoopIdentityTest(unittest.TestCase):
             ".gemini-extension.json",
         ):
             with self.subTest(path=relative):
-                self.assertEqual(self.load(relative)["version"], "0.4.0")
+                self.assertEqual(self.load(relative)["version"], "0.5.0")
 
     def test_antigravity_hook_namespaces_and_paths_use_agent_loop(self):
         for relative in ("hooks.json", ".agents/hooks.json"):
@@ -86,8 +86,12 @@ class LoopPackPackagingTest(unittest.TestCase):
         self.assertEqual(claude_entry.resolve(strict=True), canonical.resolve(strict=True))
         self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
 
-    def test_new_loop_skills_have_one_canonical_cross_host_source(self):
-        for name in ("assurance-loop", "research-adoption-loop"):
+    def test_subloop_skills_have_one_canonical_cross_host_source(self):
+        for name in (
+            "assurance-loop",
+            "debug-loop",
+            "research-adoption-loop",
+        ):
             with self.subTest(skill=name):
                 canonical = ROOT / "skills" / name
                 claude_entry = ROOT / ".claude" / "skills" / name
@@ -111,6 +115,7 @@ class LoopPackPackagingTest(unittest.TestCase):
             "skills/evolution-loop/SKILL.md",
             "skills/ci-repair-loop/SKILL.md",
             "skills/assurance-loop/SKILL.md",
+            "skills/debug-loop/SKILL.md",
             "skills/research-adoption-loop/SKILL.md",
         ):
             with self.subTest(path=relative):
@@ -147,40 +152,34 @@ class LoopPackPackagingTest(unittest.TestCase):
             content.index('ci_repair_loop.py" complete'),
         )
 
-    def test_new_loop_skills_guard_terminal_order_and_external_actions(self):
-        cases = (
-            (
-                "assurance-loop",
-                "assurance_loop.py",
-                "--report",
-                "review-clean",
-            ),
-            (
-                "research-adoption-loop",
-                "research_adoption_loop.py",
-                "--brief",
-                "adopted",
-            ),
-        )
-        for name, script, artifact_flag, terminal in cases:
+    def test_subloop_skills_declare_hierarchical_boundaries(self):
+        for name in (
+            "assurance-loop",
+            "debug-loop",
+            "ci-repair-loop",
+            "research-adoption-loop",
+        ):
             with self.subTest(skill=name):
-                content = (
-                    ROOT / "skills" / name / "SKILL.md"
-                ).read_text(encoding="utf-8")
-                normalized = " ".join(content.split())
-
-                self.assertIn("parent of the `skills/` directory", normalized)
-                self.assertIn(f'{script}" status', normalized)
-                self.assertIn("scenario_gate.py\" completion", normalized)
-                self.assertIn("--finish", normalized)
-                self.assertIn(artifact_flag, content)
-                self.assertIn(terminal, content)
-                self.assertIn("untrusted evidence", normalized)
-                self.assertIn("Never", content)
-                self.assertLess(
-                    content.rindex('scenario_gate.py" completion'),
-                    content.rindex(f'{script}" submit'),
+                content = (ROOT / "skills" / name / "SKILL.md").read_text(
+                    encoding="utf-8"
                 )
+                normalized = " ".join(content.split()).lower()
+
+                self.assertIn("standalone", normalized)
+                self.assertIn("subloop", normalized)
+                self.assertIn("evolution main", normalized)
+                self.assertIn("_workspace/.active-run", normalized)
+                self.assertIn("result-input.json", normalized)
+                for status in (
+                    "completed",
+                    "changes-requested",
+                    "needs-decision",
+                    "blocked",
+                    "budget-exhausted",
+                ):
+                    self.assertIn(status, normalized)
+                for forbidden in ("push", "merge", "deploy"):
+                    self.assertIn(forbidden, normalized)
 
                 metadata = (
                     ROOT / "skills" / name / "agents" / "openai.yaml"
@@ -227,11 +226,12 @@ class LoopPackPackagingTest(unittest.TestCase):
 
     def test_new_loop_scripts_are_pack_owned_entry_points(self):
         self.assertTrue((ROOT / "scripts" / "assurance_loop.py").is_file())
+        self.assertTrue((ROOT / "scripts" / "debug_loop.py").is_file())
         self.assertTrue(
             (ROOT / "scripts" / "research_adoption_loop.py").is_file()
         )
 
-    def test_docs_define_the_product_domain_and_four_implemented_packs(self):
+    def test_docs_define_main_subloops_gates_and_five_implemented_packs(self):
         content = (
             (ROOT / "README.md").read_text(encoding="utf-8")
             + (ROOT / "PLUGIN.md").read_text(encoding="utf-8")
@@ -242,12 +242,26 @@ class LoopPackPackagingTest(unittest.TestCase):
             "Loop Engine",
             "Loop Pack",
             "Gate",
+            "Main Loop",
+            "Subloop",
             "evolution-loop",
             "ci-repair-loop",
             "assurance-loop",
+            "debug-loop",
             "research-adoption-loop",
         ):
             self.assertIn(required, content)
+
+    def test_evolution_skill_owns_subloop_dispatch_and_final_completion(self):
+        content = (ROOT / "skills" / "evolution-loop" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Main Loop", content)
+        self.assertIn("invoke-subloop", content)
+        self.assertIn("accept-subloop", content)
+        self.assertIn("_workspace/.active-run", content)
+        self.assertIn("only Main", content)
 
 
 if __name__ == "__main__":

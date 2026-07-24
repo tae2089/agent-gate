@@ -159,6 +159,7 @@ assessment object, then let the Pack prepare a source-bound common result:
 python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" prepare-subloop-result \
   _workspace/<main>/subloops/<invocation-id> \
   --assessment _workspace/<main>/subloops/<invocation-id>/assessment-input.json \
+  [--changed-path <authorized-relative-path>] \
   --project-root "$PROJECT_ROOT" --json
 ```
 
@@ -166,6 +167,8 @@ The command writes `assurance-report.json` and `result-input.json`. A passing
 assessment maps to `completed`; actionable findings map to
 `changes-requested`. Evolution Main validates and accepts the result, debits
 budget, and decides the next phase.
+When the source snapshot changed, declare every changed path; omission,
+read-only mutation, and out-of-scope paths are rejected.
 
 If the Subloop needs a requirement or authority decision, do not guess or edit
 the invocation. Return a parent-consumable `needs-decision` result. Use

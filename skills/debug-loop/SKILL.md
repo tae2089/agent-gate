@@ -127,9 +127,13 @@ source-bound common result:
 python3 "$AGENT_LOOP_ROOT/scripts/debug_loop.py" prepare-subloop-result \
   _workspace/<main>/subloops/<invocation-id> \
   --diagnosis _workspace/<main>/subloops/<invocation-id>/diagnosis-input.json \
+  [--changed-path <authorized-relative-path>] \
+  [--scenario-result-sha256 <parent-receipt-sha256>] \
   --project-root "$PROJECT_ROOT" --json
 ```
 
 Evolution Main alone accepts `result-input.json`, debits the budget, and
 chooses the next Subloop or Main phase. A Subloop may run Completion against
 the parent task but must never finish the root task.
+Any source change must declare its authorized changed paths; read-only,
+omitted, or out-of-scope mutations are rejected.

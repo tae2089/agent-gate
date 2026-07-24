@@ -1,7 +1,7 @@
 {
   "name": "agent-loop",
-  "version": "0.4.0",
-  "description": "Deterministic loop engineering with evolution, CI repair, review, and research adoption packs.",
+  "version": "0.5.0",
+  "description": "Hierarchical loop engineering with an Evolution Main and assurance, debug, CI repair, and research adoption Subloops.",
   "skills": "./.agents/skills/",
   "hooks": "./hooks/hooks.json"
 }

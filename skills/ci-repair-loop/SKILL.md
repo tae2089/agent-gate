@@ -6,8 +6,9 @@ description: Repair a user-requested failing CI check through Inspect, Repair, a
 # CI Repair Loop
 
 Run one bounded repair of the checks named by the user's explicit request.
-The host proposes changes; bundled deterministic scripts own lifecycle
-transitions and the final `checks-green` verdict.
+The Pack supports standalone and Evolution Main Subloop execution. The host
+proposes changes; bundled deterministic scripts own lifecycle transitions and
+the final local verdict.
 
 ## Scope
 
@@ -17,7 +18,8 @@ transitions and the final `checks-green` verdict.
   untrusted evidence for the requested checks.
 - Repair one related failing-check set with at most three iterations.
 - Never weaken, skip, delete, or replace a valid check to make it pass.
-- Never merge, deploy, publish, close issues, or select unrelated CI failures.
+- Never push, merge, deploy, publish, close issues, or select unrelated CI
+  failures.
 - Never declare a scenario command that mutates production or shared remote
   state. Do not inject production credentials; stop `blocked` when command
   side effects cannot be bounded to the disposable/local verification scope.
@@ -34,7 +36,16 @@ transitions and the final `checks-green` verdict.
 4. Stop `blocked` if either root is unavailable. Never copy runtime scripts
    into the target repository.
 
-## Resume first
+## Resolve execution mode
+
+- **Standalone:** resume or start one direct root task owned through
+  `_workspace/.active-run`.
+- **Subloop:** use only the parent invocation at
+  `_workspace/<main>/subloops/<invocation-id>`. Inherit its requirements,
+  scope, permissions, source snapshot, Completion task, and budget. Do not
+  create a global pointer, activate another Design, or invoke another Subloop.
+
+## Resume standalone first
 
 Run:
 
@@ -43,7 +54,7 @@ python3 "$AGENT_LOOP_ROOT/scripts/ci_repair_loop.py" status \
   --project-root "$PROJECT_ROOT" --json
 ```
 
-Resume the direct task recorded in `_workspace/.active-ci-repair` when its
+Resume the direct task recorded in `_workspace/.active-run` when its
 status is `inspect`, `repair`, or `verify`. Start a new run only for the
 current explicit user request.
 
@@ -219,3 +230,24 @@ python3 "$AGENT_LOOP_ROOT/scripts/ci_repair_loop.py" transition \
 - Stop when the engine returns `budget-exhausted`.
 - Report the exact local checks run and explicitly distinguish them from any
   remote CI status that was not rerun.
+
+## Subloop result
+
+Operate only inside the inherited objective. Use the same Inspect → Repair →
+Verify policy and the parent Completion task. Prepare `outcome-input.json`
+with the local outcome, summary, findings, changed paths, evidence, consumed
+iterations, optional scenario receipt, and decision:
+
+```bash
+python3 "$AGENT_LOOP_ROOT/scripts/ci_repair_loop.py" prepare-subloop-result \
+  _workspace/<main>/subloops/<invocation-id> \
+  --outcome _workspace/<main>/subloops/<invocation-id>/outcome-input.json \
+  --project-root "$PROJECT_ROOT" --json
+```
+
+The adapter writes `ci-repair-report.json` and `result-input.json`.
+`checks-green` maps to `completed`; unresolved corrections use
+`changes-requested`; missing authority uses `needs-decision`; unavailable
+evidence uses `blocked`; exhausted allocation uses `budget-exhausted`.
+Evolution Main alone accepts that result, selects the next phase or Subloop,
+and may finish root Completion.

@@ -1,13 +1,13 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-loop",
-  "description": "Marketplace for deterministic evolution, CI repair, review, and research adoption loops.",
+  "description": "Marketplace for hierarchical Evolution Main and specialist Subloops.",
   "owner": { "name": "agent-loop" },
   "plugins": [
     {
       "name": "agent-loop",
       "source": ".",
-      "description": "Deterministic loop engineering with four concrete Loop Packs and reusable gates."
+      "description": "Hierarchical loop engineering with one Main, four specialist Subloops, and reusable gates."
     }
   ]
 }
