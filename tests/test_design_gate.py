@@ -61,11 +61,68 @@ class DesignGateTest(unittest.TestCase):
 
         self.assertTrue(result.allowed, result.errors)
         pointer = self.project / "_workspace" / ".active-task"
-        self.assertEqual(pointer.read_text(encoding="utf-8"), "_workspace/sample-task\n")
+        self.assertEqual(
+            pointer.read_text(encoding="utf-8"), "_workspace/sample-task\n"
+        )
         active, errors = scenario_gate.resolve_active_task(self.project)
         self.assertEqual(errors, ())
         self.assertEqual(active, self.task.resolve())
         self.assertFalse((self.project / "_workspace" / ".readiness-sessions").exists())
+
+    def test_activation_preserves_a_different_active_design(self):
+        self.assertTrue(scenario_gate.activate_design(self.task, self.project).allowed)
+        other = self.project / "_workspace" / "other-task"
+        other.mkdir()
+        for filename in ("task.md", "implementation.md", "scenario-contract.json"):
+            (other / filename).write_bytes((self.task / filename).read_bytes())
+
+        blocked = scenario_gate.activate_design(other, self.project)
+        repeated = scenario_gate.activate_design(self.task, self.project)
+
+        self.assertFalse(blocked.allowed)
+        self.assertIn("another design is active", blocked.errors)
+        self.assertTrue(repeated.allowed, repeated.errors)
+        active, errors = scenario_gate.resolve_active_task(self.project)
+        self.assertFalse(errors)
+        self.assertEqual(active, self.task.resolve())
+
+    def test_release_cli_clears_only_the_exact_active_design(self):
+        self.assertTrue(scenario_gate.activate_design(self.task, self.project).allowed)
+        other = self.project / "_workspace" / "other-task"
+        other.mkdir()
+        pointer = self.project / "_workspace" / ".active-task"
+
+        wrong = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "release",
+                str(other),
+                "--project-root",
+                str(self.project),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        released = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "release",
+                str(self.task),
+                "--project-root",
+                str(self.project),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        self.assertEqual(wrong.returncode, 1)
+        self.assertIn("not the active design", wrong.stdout)
+        self.assertTrue(released.returncode == 0, released.stdout + released.stderr)
+        self.assertFalse(pointer.exists())
 
     def test_pre_edit_hook_uses_active_design_without_session_id(self):
         event = {
@@ -85,9 +142,7 @@ class DesignGateTest(unittest.TestCase):
         self.assertEqual(output["permissionDecision"], "deny")
         self.assertIn("no active design", output["permissionDecisionReason"])
 
-        self.assertTrue(
-            scenario_gate.activate_design(self.task, self.project).allowed
-        )
+        self.assertTrue(scenario_gate.activate_design(self.task, self.project).allowed)
         allowed = subprocess.run(
             [sys.executable, str(HOOK)],
             input=json.dumps(event),
@@ -168,6 +223,7 @@ class DesignGateTest(unittest.TestCase):
         task, errors = scenario_gate.resolve_active_task(self.project)
         self.assertIsNone(task)
         self.assertIn("must not be a symlink", errors[0])
+
 
 if __name__ == "__main__":
     unittest.main()

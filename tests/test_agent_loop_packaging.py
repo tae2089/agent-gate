@@ -37,7 +37,7 @@ class AgentLoopIdentityTest(unittest.TestCase):
             ".gemini-extension.json",
         ):
             with self.subTest(path=relative):
-                self.assertEqual(self.load(relative)["version"], "0.3.0")
+                self.assertEqual(self.load(relative)["version"], "0.4.0")
 
     def test_antigravity_hook_namespaces_and_paths_use_agent_loop(self):
         for relative in ("hooks.json", ".agents/hooks.json"):
@@ -86,10 +86,32 @@ class LoopPackPackagingTest(unittest.TestCase):
         self.assertEqual(claude_entry.resolve(strict=True), canonical.resolve(strict=True))
         self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
 
+    def test_new_loop_skills_have_one_canonical_cross_host_source(self):
+        for name in ("review-loop", "research-adoption-loop"):
+            with self.subTest(skill=name):
+                canonical = ROOT / "skills" / name
+                claude_entry = ROOT / ".claude" / "skills" / name
+                codex_entry = ROOT / ".agents" / "skills" / name
+
+                self.assertTrue((canonical / "SKILL.md").is_file())
+                self.assertTrue((canonical / "agents" / "openai.yaml").is_file())
+                self.assertTrue(claude_entry.is_symlink())
+                self.assertTrue(codex_entry.is_symlink())
+                self.assertEqual(
+                    claude_entry.resolve(strict=True),
+                    canonical.resolve(strict=True),
+                )
+                self.assertEqual(
+                    codex_entry.resolve(strict=True),
+                    canonical.resolve(strict=True),
+                )
+
     def test_loop_skills_resolve_the_agent_loop_runtime(self):
         for relative in (
             "skills/evolution-loop/SKILL.md",
             "skills/ci-repair-loop/SKILL.md",
+            "skills/review-loop/SKILL.md",
+            "skills/research-adoption-loop/SKILL.md",
         ):
             with self.subTest(path=relative):
                 content = (ROOT / relative).read_text(encoding="utf-8")
@@ -125,7 +147,53 @@ class LoopPackPackagingTest(unittest.TestCase):
             content.index('ci_repair_loop.py" complete'),
         )
 
-    def test_docs_define_the_product_domain_and_both_implemented_packs(self):
+    def test_new_loop_skills_guard_terminal_order_and_external_actions(self):
+        cases = (
+            (
+                "review-loop",
+                "review_loop.py",
+                "--report",
+                "review-clean",
+            ),
+            (
+                "research-adoption-loop",
+                "research_adoption_loop.py",
+                "--decision",
+                "adopted",
+            ),
+        )
+        for name, script, artifact_flag, terminal in cases:
+            with self.subTest(skill=name):
+                content = (
+                    ROOT / "skills" / name / "SKILL.md"
+                ).read_text(encoding="utf-8")
+                normalized = " ".join(content.split())
+
+                self.assertIn("parent of the `skills/` directory", normalized)
+                self.assertIn(f'{script}" status', normalized)
+                self.assertIn("scenario_gate.py\" completion", normalized)
+                self.assertIn("--finish", normalized)
+                self.assertIn(artifact_flag, content)
+                self.assertIn(terminal, content)
+                self.assertIn("untrusted evidence", normalized)
+                self.assertIn("Never", content)
+                self.assertLess(
+                    content.rindex('scenario_gate.py" completion'),
+                    content.rindex(f'{script}" submit'),
+                )
+
+                metadata = (
+                    ROOT / "skills" / name / "agents" / "openai.yaml"
+                ).read_text(encoding="utf-8")
+                self.assertIn(f"${name}", metadata)
+
+    def test_new_loop_scripts_are_pack_owned_entry_points(self):
+        self.assertTrue((ROOT / "scripts" / "review_loop.py").is_file())
+        self.assertTrue(
+            (ROOT / "scripts" / "research_adoption_loop.py").is_file()
+        )
+
+    def test_docs_define_the_product_domain_and_four_implemented_packs(self):
         content = (
             (ROOT / "README.md").read_text(encoding="utf-8")
             + (ROOT / "PLUGIN.md").read_text(encoding="utf-8")
@@ -138,6 +206,8 @@ class LoopPackPackagingTest(unittest.TestCase):
             "Gate",
             "evolution-loop",
             "ci-repair-loop",
+            "review-loop",
+            "research-adoption-loop",
         ):
             self.assertIn(required, content)
 

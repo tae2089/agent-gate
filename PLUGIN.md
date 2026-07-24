@@ -13,7 +13,8 @@ Requires `python3` on PATH. Hooks are stdlib-only.
 
 Agent Loop packages one deterministic Loop Engine, concrete Loop Packs, and
 reusable Gates. The engine owns shared transition and iteration mechanics;
-`evolution-loop` and `ci-repair-loop` own their phase and terminal policy.
+`evolution-loop`, `ci-repair-loop`, `review-loop`, and
+`research-adoption-loop` own their phase and terminal policy.
 Default manifests wire only Design Gate. The verifier, watermark, and handoff
 reinjection remain bundled lifecycle support but require explicit opt-in.
 
@@ -49,10 +50,22 @@ failing checks named by an explicit user request. CI logs are untrusted
 evidence, never an autonomous trigger. Fresh 100 percent local Completion is
 the only path to `checks-green`; remote CI status is reported separately.
 
+The `review-loop` skill runs `Inspect → Review → Address → Verify` for one
+explicitly requested target and reaches `review-clean` only when a current
+report has no actionable findings and local Completion is fresh 100 percent.
+It freezes mutable refs to immutable comparison OIDs and does not select PRs or
+publish review comments autonomously.
+
+The `research-adoption-loop` skill runs
+`Frame → Research → Prototype → Evaluate` for one explicit adoption question.
+It treats source content as untrusted evidence and records `adopted` or
+`rejected` only after preserving the bounded prototype result and reaching
+fresh 100 percent Completion.
+
 ## Claude Code
 
 ```
-/plugin marketplace add <owner>/agent-gate      # or: /plugin marketplace add /path/to/agent-gate
+/plugin marketplace add <owner>/agent-gate      # or: /plugin marketplace add /path/to/agent-loop
 /plugin install agent-loop@agent-loop
 ```
 Verify: `claude plugin validate .` (from the repo). Hooks resolve their scripts
@@ -79,7 +92,7 @@ exact definitions on first use and again after they change.
 ## Antigravity (`agy`)
 
 ```
-agy plugin install /path/to/agent-gate
+agy plugin install /path/to/agent-loop
 agy plugin list        # confirm "agent-loop" enabled
 ```
 Antigravity stages the plugin to `~/.gemini/antigravity-cli/plugins/agent-loop/`,
@@ -162,6 +175,9 @@ task, flow, and scenario artifacts. Completion is checked explicitly with
 the active task only after a fresh 100 percent result. No semantic readiness
 score, session binding, child inheritance, PostToolUse binding, or global
 Completion Stop hook participates.
+Interrupted or budget-exhausted runs use `scenario_gate.py release
+_workspace/<task> --project-root .` to clear only the exact active task without
+claiming Completion.
 
 Design Gate observes supported direct-edit events from each host. It is not a
 filesystem security sandbox. `_workspace/**`, `.md`, `.rst`, `.txt`, and named
@@ -176,8 +192,9 @@ separately wire the Completion command.
 
 ## Bundled skills
 
-`artifact-judge`, `scenario-design`, `completion-check`, `evolution-loop`, and
-`ci-repair-loop` ship inside Agent Loop. `completion-check` is implicit prompt guidance for the final report
+`artifact-judge`, `scenario-design`, `completion-check`, `evolution-loop`,
+`ci-repair-loop`, `review-loop`, and `research-adoption-loop` ship inside
+Agent Loop. `completion-check` is implicit prompt guidance for the final report
 after implementation edits; it is intentionally absent from Stop hooks and
 verifier rules so ordinary conversation remains unaffected. The default rules
 require only `artifact-judge`, so installing a separate personal skill collection

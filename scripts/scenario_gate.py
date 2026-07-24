@@ -9,6 +9,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -195,7 +196,10 @@ def _load_contract(
         scenario = _object(raw, label, errors)
         _fields(scenario, SCENARIO_FIELDS, SCENARIO_FIELDS, label, errors)
         scenario_id = scenario.get("id")
-        if not isinstance(scenario_id, str) or SCENARIO_ID.fullmatch(scenario_id) is None:
+        if (
+            not isinstance(scenario_id, str)
+            or SCENARIO_ID.fullmatch(scenario_id) is None
+        ):
             errors.append(f"{label}.id must match {SCENARIO_ID.pattern}")
         else:
             ids.append(scenario_id)
@@ -217,7 +221,9 @@ def _load_contract(
         for field in ("given", "when", "then"):
             _string_list(scenario.get(field), f"{label}.{field}", errors)
         scenarios.append(scenario)
-    duplicates = sorted({scenario_id for scenario_id in ids if ids.count(scenario_id) > 1})
+    duplicates = sorted(
+        {scenario_id for scenario_id in ids if ids.count(scenario_id) > 1}
+    )
     if duplicates:
         errors.append("duplicate scenario id: " + ", ".join(duplicates))
     return tuple(scenarios), content
@@ -354,7 +360,21 @@ def activate_design(
     task = Path(task_dir)
     if not task.is_absolute():
         task = root / task
-    relative = task.resolve(strict=True).relative_to(root)
+    task = task.resolve(strict=True)
+    active, active_errors = resolve_active_task(root)
+    if active_errors:
+        return ScenarioGateResult(
+            False,
+            active_errors,
+            result.required_scenarios,
+        )
+    if active is not None and active != task:
+        return ScenarioGateResult(
+            False,
+            ("another design is active",),
+            result.required_scenarios,
+        )
+    relative = task.relative_to(root)
     pointer = root / ACTIVE_TASK_RELATIVE
     try:
         pointer.parent.mkdir(parents=True, exist_ok=True)
@@ -380,7 +400,7 @@ def deactivate_design(
     if task is None:
         return tuple(errors)
     if active is None or active != task:
-        return ("cannot finish a task that is not the active design",)
+        return ("cannot release a task that is not the active design",)
     pointer = root / ACTIVE_TASK_RELATIVE
     try:
         if pointer.is_symlink():
@@ -429,11 +449,21 @@ def _source_fingerprint(root: Path) -> tuple[str | None, tuple[str, ...]]:
         errors.append(error)
     tracked_diff, error = _git_output(
         root,
-        ("diff", "--binary", "--no-ext-diff", "HEAD", "--", ".", ":(exclude)_workspace/**"),
+        (
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "HEAD",
+            "--",
+            ".",
+            ":(exclude)_workspace/**",
+        ),
     )
     if error:
         errors.append(error)
-    untracked, error = _git_output(root, ("ls-files", "--others", "--exclude-standard", "-z"))
+    untracked, error = _git_output(
+        root, ("ls-files", "--others", "--exclude-standard", "-z")
+    )
     if error:
         errors.append(error)
     if errors or head is None or tracked_diff is None or untracked is None:
@@ -455,13 +485,25 @@ def _source_fingerprint(root: Path) -> tuple[str | None, tuple[str, ...]]:
             continue
         path = root / relative
         try:
-            stat = path.lstat()
+            file_stat = path.lstat()
         except OSError as exc:
             errors.append(f"cannot stat untracked path {relative.as_posix()}: {exc}")
             continue
         digest.update(raw_relative)
         digest.update(b"\0")
-        digest.update(f"{stat.st_mode}:{stat.st_size}:{stat.st_mtime_ns}".encode("ascii"))
+        digest.update(f"{file_stat.st_mode}:{file_stat.st_size}".encode("ascii"))
+        digest.update(b"\0")
+        try:
+            if stat.S_ISREG(file_stat.st_mode):
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1_048_576):
+                        digest.update(chunk)
+            elif stat.S_ISLNK(file_stat.st_mode):
+                digest.update(os.fsencode(os.readlink(path)))
+            else:
+                errors.append(f"unsupported untracked path type: {relative.as_posix()}")
+        except OSError as exc:
+            errors.append(f"cannot read untracked path {relative.as_posix()}: {exc}")
         digest.update(b"\0")
     if errors:
         return None, tuple(errors)
@@ -482,7 +524,9 @@ def _kill_runner(process: subprocess.Popen[Any]) -> None:
 
 
 def _execute_scenario(root: Path, scenario: dict[str, Any]) -> dict[str, Any]:
-    environment = {key: value for key, value in os.environ.items() if key in SAFE_ENVIRONMENT}
+    environment = {
+        key: value for key, value in os.environ.items() if key in SAFE_ENVIRONMENT
+    }
     started = time.monotonic()
     timed_out = False
     output_exceeded = False
@@ -524,7 +568,10 @@ def _execute_scenario(root: Path, scenario: dict[str, Any]) -> dict[str, Any]:
 
     item: dict[str, Any] = {"id": scenario["id"], "duration_ms": duration_ms}
     if launch_error is not None:
-        item.update(status="infrastructure-error", reason=f"runner launch failed: {launch_error}")
+        item.update(
+            status="infrastructure-error",
+            reason=f"runner launch failed: {launch_error}",
+        )
     elif timed_out:
         item.update(
             status="infrastructure-error",
@@ -542,9 +589,7 @@ def _execute_scenario(root: Path, scenario: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
-def run_scenarios(
-    task_dir: Path | str, project_root: Path | str
-) -> ScenarioRunResult:
+def run_scenarios(task_dir: Path | str, project_root: Path | str) -> ScenarioRunResult:
     root = Path(project_root).resolve(strict=True)
     design, design_errors = _resolve_design(task_dir, root)
     if design is None:
@@ -565,7 +610,9 @@ def run_scenarios(
     try:
         _atomic_write_json(path, value)
     except OSError as exc:
-        return ScenarioRunResult(False, (f"cannot write {RESULT_FILENAME}: {exc}",), None)
+        return ScenarioRunResult(
+            False, (f"cannot write {RESULT_FILENAME}: {exc}",), None
+        )
     return ScenarioRunResult(True, (), path)
 
 
@@ -602,7 +649,9 @@ def _stored_results(
             valid = False
         duration = item.get("duration_ms")
         if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
-            errors.append(f"scenario result {scenario_id}.duration_ms must be non-negative")
+            errors.append(
+                f"scenario result {scenario_id}.duration_ms must be non-negative"
+            )
             valid = False
         reason = item.get("reason")
         if reason is not None and not isinstance(reason, str):
@@ -631,9 +680,14 @@ def _validate_current_result(
     result: dict[str, Any] = {}
     if loaded is not None:
         result, _ = loaded
-        current = _fields(result, RESULT_FIELDS, RESULT_FIELDS, "scenario result", errors) and current
+        current = (
+            _fields(result, RESULT_FIELDS, RESULT_FIELDS, "scenario result", errors)
+            and current
+        )
         if result.get("schema_version") != RESULT_SCHEMA_VERSION:
-            errors.append(f"scenario result schema_version must be {RESULT_SCHEMA_VERSION}")
+            errors.append(
+                f"scenario result schema_version must be {RESULT_SCHEMA_VERSION}"
+            )
             current = False
         expected_hashes = {
             "task_sha256": _sha256(design.task_content),
@@ -691,14 +745,53 @@ def validate_completion(
     if trace is None or trace.percentage != 100.0:
         percentage = trace.percentage if trace is not None else 0.0
         errors.append(
-            "scenario trace completeness must be 100%, "
-            f"got {percentage:.2f}%"
+            f"scenario trace completeness must be 100%, got {percentage:.2f}%"
         )
     return ScenarioGateResult(
         not errors,
         tuple(dict.fromkeys(errors)),
         current.required_scenarios,
         trace,
+    )
+
+
+def validate_scenario_receipt(
+    task_dir: Path | str,
+    project_root: Path | str,
+    scenario_result_sha256: Any,
+    *,
+    require_completion: bool,
+) -> ScenarioGateResult:
+    gate = (
+        validate_completion(task_dir, project_root)
+        if require_completion
+        else validate_current_result(task_dir, project_root)
+    )
+    errors = list(gate.errors)
+    if (
+        not isinstance(scenario_result_sha256, str)
+        or len(scenario_result_sha256) != 64
+        or any(
+            character not in "0123456789abcdef" for character in scenario_result_sha256
+        )
+    ):
+        errors.append("scenario_result_sha256 must be a lowercase SHA-256")
+    path = Path(task_dir) / RESULT_FILENAME
+    if path.is_symlink():
+        errors.append("scenario result must not be a symlink")
+    else:
+        try:
+            actual = _sha256(path.read_bytes())
+        except OSError as exc:
+            errors.append(f"cannot read {RESULT_FILENAME}: {exc}")
+        else:
+            if actual != scenario_result_sha256:
+                errors.append("scenario_result_sha256 is stale")
+    return ScenarioGateResult(
+        not errors,
+        tuple(dict.fromkeys(errors)),
+        gate.required_scenarios,
+        gate.trace_completeness,
     )
 
 
@@ -721,12 +814,16 @@ def _print_gate(result: ScenarioGateResult, as_json: bool) -> None:
         return
     print("PASS" if result.allowed else "BLOCK")
     if result.trace_completeness is not None:
-        print(f"  scenario trace completeness: {result.trace_completeness.percentage:.2f}%")
+        print(
+            f"  scenario trace completeness: {result.trace_completeness.percentage:.2f}%"
+        )
     for error in result.errors:
         print(f"  error: {error}")
 
 
-def _selected_task(raw_task: Path | None, root: Path) -> tuple[Path | None, tuple[str, ...]]:
+def _selected_task(
+    raw_task: Path | None, root: Path
+) -> tuple[Path | None, tuple[str, ...]]:
     if raw_task is not None:
         errors: list[str] = []
         return _project_task_dir(root, raw_task, errors), tuple(errors)
@@ -744,6 +841,10 @@ def main() -> int:
     design_command.add_argument("--project-root", required=True, type=Path)
     design_command.add_argument("--activate", action="store_true")
     design_command.add_argument("--json", action="store_true")
+    release_command = subparsers.add_parser("release")
+    release_command.add_argument("task_dir", type=Path)
+    release_command.add_argument("--project-root", required=True, type=Path)
+    release_command.add_argument("--json", action="store_true")
     for name in ("run", "completion"):
         command = subparsers.add_parser(name)
         command.add_argument("task_dir", type=Path, nargs="?")
@@ -763,6 +864,12 @@ def main() -> int:
         return 0 if result.allowed else 1
 
     root = args.project_root.resolve(strict=True)
+    if args.operation == "release":
+        release_errors = deactivate_design(args.task_dir, root)
+        result = ScenarioGateResult(not release_errors, release_errors, ())
+        _print_gate(result, args.json)
+        return 0 if result.allowed else 1
+
     task, task_errors = _selected_task(args.task_dir, root)
     if task is None:
         result = ScenarioGateResult(False, task_errors, ())

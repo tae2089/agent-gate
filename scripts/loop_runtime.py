@@ -69,7 +69,8 @@ def load_managed_run(
     definition: ManagedLoopDefinition,
     task_dir: Path,
 ) -> LoopResult:
-    path = Path(task_dir) / definition.state_filename
+    task = Path(task_dir)
+    path = task / definition.state_filename
     name = definition.loop.name
     if path.is_symlink():
         return LoopResult(False, (f"{name} state must not be a symlink",), {})
@@ -88,20 +89,29 @@ def load_managed_run(
     if missing:
         errors.append(f"{name} state is missing fields: {', '.join(missing)}")
     if value.get("schema_version") != STATE_SCHEMA_VERSION:
-        errors.append(
-            f"{name} state schema_version must be {STATE_SCHEMA_VERSION}"
-        )
+        errors.append(f"{name} state schema_version must be {STATE_SCHEMA_VERSION}")
     statuses = set(definition.loop.transitions) | definition.loop.terminal_statuses
     if value.get("status") not in statuses:
         errors.append(f"unsupported {name} status: {value.get('status')}")
-    errors.extend(
-        f"{name} state {error}" for error in validate_iteration_state(value)
-    )
+    errors.extend(f"{name} state {error}" for error in validate_iteration_state(value))
     if not _valid_sha256(value.get(definition.input_hash_field)):
         errors.append(
-            f"{name} state {definition.input_hash_field} "
-            "must be a lowercase SHA-256"
+            f"{name} state {definition.input_hash_field} must be a lowercase SHA-256"
         )
+    input_path = task / definition.input_filename
+    if input_path.is_symlink():
+        errors.append(f"{name} input must not be a symlink")
+    else:
+        try:
+            input_content = input_path.read_bytes()
+        except OSError as exc:
+            errors.append(f"cannot read {name} input: {exc}")
+        else:
+            expected_hash = value.get(definition.input_hash_field)
+            if _valid_sha256(expected_hash) and (
+                content_sha256(input_content) != expected_hash
+            ):
+                errors.append(f"{name} input hash is stale")
     return LoopResult(not errors, tuple(dict.fromkeys(errors)), value)
 
 
@@ -145,7 +155,14 @@ def start_managed_run(
     if direct_task is None:
         return LoopResult(False, direct_errors, {})
     task = direct_task
+    input_path = task / definition.input_filename
     state_path = task / definition.state_filename
+    if input_path.exists() or input_path.is_symlink():
+        return LoopResult(
+            False,
+            (f"{definition.loop.name} input already exists",),
+            {},
+        )
     if state_path.exists() or state_path.is_symlink():
         return LoopResult(
             False,
@@ -176,18 +193,31 @@ def start_managed_run(
         "max_iterations": max_iterations,
         definition.input_hash_field: content_sha256(input_content),
     }
+    created_paths: list[Path] = []
     try:
-        atomic_write(task / definition.input_filename, input_content)
+        atomic_write(input_path, input_content)
+        created_paths.append(input_path)
         _write_state(definition, task, state)
+        created_paths.append(state_path)
         relative = task.relative_to(root)
         atomic_write(
             pointer,
             (relative.as_posix() + "\n").encode("utf-8"),
         )
     except OSError as exc:
+        cleanup_errors: list[str] = []
+        for created_path in reversed(created_paths):
+            try:
+                created_path.unlink(missing_ok=True)
+            except OSError as cleanup_exc:
+                cleanup_errors.append(
+                    f"cannot remove partial {created_path.name}: {cleanup_exc}"
+                )
+        errors = [f"cannot start {definition.loop.name} run: {exc}"]
+        errors.extend(cleanup_errors)
         return LoopResult(
             False,
-            (f"cannot start {definition.loop.name} run: {exc}",),
+            tuple(errors),
             {},
         )
     return LoopResult(True, (), state)
@@ -210,9 +240,7 @@ def transition_managed_run(
     except OSError as exc:
         return LoopResult(
             False,
-            (
-                f"cannot persist {definition.loop.name} state: {exc}",
-            ),
+            (f"cannot persist {definition.loop.name} state: {exc}",),
             loaded.state,
         )
     return decision
@@ -237,10 +265,7 @@ def terminate_managed_run(
     if status not in definition.interrupt_terminals:
         return LoopResult(
             False,
-            (
-                f"unsupported {definition.loop.name} "
-                f"terminal status: {status}",
-            ),
+            (f"unsupported {definition.loop.name} terminal status: {status}",),
             state,
         )
     state["status"] = status
@@ -249,9 +274,7 @@ def terminate_managed_run(
     except OSError as exc:
         return LoopResult(
             False,
-            (
-                f"cannot persist {definition.loop.name} state: {exc}",
-            ),
+            (f"cannot persist {definition.loop.name} state: {exc}",),
             loaded.state,
         )
     return LoopResult(True, (), state)
