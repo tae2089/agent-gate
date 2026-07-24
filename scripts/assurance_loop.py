@@ -16,6 +16,7 @@ from loop_engine import (
     LoopResult,
     atomic_write,
     canonical_json,
+    content_sha256,
     direct_workspace_task,
 )
 from loop_runtime import (
@@ -26,10 +27,15 @@ from loop_runtime import (
     terminate_managed_run,
     transition_managed_run,
 )
-from scenario_gate import validate_completion, validate_scenario_receipt
+from scenario_gate import (
+    source_fingerprint,
+    validate_completion,
+    validate_scenario_receipt,
+)
+from subloop_contract import PackProfile, SUBLOOP_PERMISSIONS
 
-REQUEST_SCHEMA_VERSION = 1
-REPORT_SCHEMA_VERSION = 1
+REQUEST_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 2
 REQUEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -37,7 +43,9 @@ REQUEST_FIELDS = frozenset(
         "source_ref",
         "request",
         "target",
+        "requirements",
         "scope",
+        "permissions",
         "evidence",
     }
 )
@@ -46,46 +54,71 @@ REPORT_FIELDS = frozenset(
         "schema_version",
         "request_sha256",
         "scenario_result_sha256",
-        "verdict",
-        "findings",
+        "assessments",
     }
 )
-FINDING_FIELDS = frozenset({"id", "severity", "title", "evidence", "action"})
-FINDING_ID = re.compile(r"R-[0-9]{3}")
+ASSESSMENT_FIELDS = frozenset({"status", "findings"})
+FINDING_FIELDS = frozenset(
+    {
+        "id",
+        "category",
+        "severity",
+        "title",
+        "requirement_refs",
+        "evidence",
+        "action",
+    }
+)
+FINDING_ID = re.compile(r"A-[0-9]{3}")
 SEVERITIES = frozenset({"P0", "P1", "P2", "P3"})
-VERDICTS = frozenset({"actionable", "clean"})
+ASSESSMENT_STATUSES = frozenset({"pass", "fail"})
+ASSESSMENT_CATEGORIES = frozenset(
+    {
+        "requirements_conformance",
+        "missing_or_overimplemented_requirements",
+        "failure_boundary_compatibility",
+        "code_quality_module_responsibility",
+        "abstraction_complexity",
+        "test_quality_regression_prevention",
+    }
+)
 PHASE_TRANSITIONS = {
-    "inspect": frozenset({"review"}),
-    "review": frozenset({"address", "review-clean"}),
+    "inspect": frozenset({"assess"}),
+    "assess": frozenset({"address", "completed", "changes-requested"}),
     "address": frozenset({"verify"}),
-    "verify": frozenset({"review"}),
+    "verify": frozenset({"assess"}),
 }
 TERMINAL_STATUSES = frozenset(
     {
-        "review-clean",
-        "needs-clarification",
+        "completed",
+        "changes-requested",
+        "needs-decision",
         "blocked",
         "budget-exhausted",
     }
 )
-REVIEW_DEFINITION = LoopDefinition(
-    name="review",
+ASSURANCE_DEFINITION = LoopDefinition(
+    name="assurance",
     transitions=PHASE_TRANSITIONS,
     terminal_statuses=TERMINAL_STATUSES,
-    iteration_transitions=frozenset({("verify", "review")}),
+    iteration_transitions=frozenset({("verify", "assess")}),
     budget_terminal="budget-exhausted",
 )
-ACTIVE_REVIEW_FILENAME = ".active-review"
-REQUEST_FILENAME = "review-request.json"
-STATE_FILENAME = "review-state.json"
-REVIEW_RUN = ManagedLoopDefinition(
-    loop=REVIEW_DEFINITION,
+ACTIVE_RUN_FILENAME = ".active-run"
+REQUEST_FILENAME = "assurance-request.json"
+STATE_FILENAME = "assurance-state.json"
+ASSURANCE_RUN = ManagedLoopDefinition(
+    loop=ASSURANCE_DEFINITION,
     input_filename=REQUEST_FILENAME,
     state_filename=STATE_FILENAME,
-    active_pointer_filename=ACTIVE_REVIEW_FILENAME,
+    active_pointer_filename=ACTIVE_RUN_FILENAME,
     input_hash_field="request_sha256",
     initial_status="inspect",
-    interrupt_terminals=frozenset({"needs-clarification", "blocked"}),
+    interrupt_terminals=frozenset({"needs-decision", "blocked"}),
+)
+PACK_PROFILE = PackProfile(
+    name="assurance-loop",
+    supported_modes=frozenset({"standalone", "subloop"}),
 )
 
 
@@ -142,23 +175,44 @@ def _valid_sha256(value: Any) -> bool:
 
 def validate_request(value: Any) -> ArtifactValidation:
     if not isinstance(value, dict):
-        return ArtifactValidation(False, ("review request must be an object",), {})
+        return ArtifactValidation(
+            False,
+            ("assurance request must be an object",),
+            {},
+        )
     errors: list[str] = []
-    _exact_fields(value, REQUEST_FIELDS, "review request", errors)
+    _exact_fields(value, REQUEST_FIELDS, "assurance request", errors)
     if value.get("schema_version") != REQUEST_SCHEMA_VERSION:
-        errors.append(f"review request schema_version must be {REQUEST_SCHEMA_VERSION}")
-    _non_empty_string(value.get("source"), "review request source", errors)
+        errors.append(
+            f"assurance request schema_version must be {REQUEST_SCHEMA_VERSION}"
+        )
+    _non_empty_string(value.get("source"), "assurance request source", errors)
     _non_empty_string(
         value.get("source_ref"),
-        "review request source_ref",
+        "assurance request source_ref",
         errors,
     )
     _non_empty_string(value.get("request"), "user request", errors)
-    _non_empty_string(value.get("target"), "review target", errors)
-    _string_list(value.get("scope"), "review scope", errors)
-    _string_list(value.get("evidence"), "review evidence", errors)
+    _non_empty_string(value.get("target"), "assurance target", errors)
+    _string_list(
+        value.get("requirements"),
+        "assurance requirements",
+        errors,
+    )
+    _string_list(value.get("scope"), "assurance scope", errors)
+    permissions = _string_list(
+        value.get("permissions"),
+        "assurance permissions",
+        errors,
+    )
+    unsupported = sorted(set(permissions) - SUBLOOP_PERMISSIONS)
+    if unsupported:
+        errors.append(
+            "assurance request has unsupported permissions: " + ", ".join(unsupported)
+        )
+    _string_list(value.get("evidence"), "assurance evidence", errors)
     if value.get("source") != "manual":
-        errors.append("review request source must be manual")
+        errors.append("assurance request source must be manual")
     normalized = {field: value[field] for field in REQUEST_FIELDS if field in value}
     return ArtifactValidation(
         not errors,
@@ -169,60 +223,109 @@ def validate_request(value: Any) -> ArtifactValidation:
 
 def _validate_finding(
     value: Any,
+    category: str,
     index: int,
     errors: list[str],
 ) -> Mapping[str, Any]:
-    label = f"review finding[{index}]"
+    label = f"assurance {category} finding[{index}]"
     if not isinstance(value, dict):
         errors.append(f"{label} must be an object")
         return {}
     _exact_fields(value, FINDING_FIELDS, label, errors)
     finding_id = value.get("id")
     if not isinstance(finding_id, str) or FINDING_ID.fullmatch(finding_id) is None:
-        errors.append(f"{label}.id must match R-NNN")
+        errors.append(f"{label}.id must match A-NNN")
+    if value.get("category") != category:
+        errors.append(f"{label}.category must match {category}")
     if value.get("severity") not in SEVERITIES:
         errors.append(f"{label}.severity must be P0, P1, P2, or P3")
     _non_empty_string(value.get("title"), f"{label}.title", errors)
+    _string_list(
+        value.get("requirement_refs"),
+        f"{label}.requirement_refs",
+        errors,
+    )
     _string_list(value.get("evidence"), f"{label}.evidence", errors)
     _non_empty_string(value.get("action"), f"{label}.action", errors)
     return {field: value[field] for field in FINDING_FIELDS if field in value}
 
 
+def _validate_assessments(
+    value: Any,
+    errors: list[str],
+) -> tuple[Mapping[str, Any], list[Mapping[str, Any]]]:
+    if not isinstance(value, dict):
+        errors.append("assurance assessments must be an object")
+        return {}, []
+    _exact_fields(
+        value,
+        ASSESSMENT_CATEGORIES,
+        "assurance assessments",
+        errors,
+    )
+    normalized: dict[str, Any] = {}
+    all_findings: list[Mapping[str, Any]] = []
+    finding_ids: list[str] = []
+    for category in sorted(ASSESSMENT_CATEGORIES & value.keys()):
+        raw_axis = value[category]
+        label = f"assurance assessment {category}"
+        if not isinstance(raw_axis, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        _exact_fields(raw_axis, ASSESSMENT_FIELDS, label, errors)
+        status = raw_axis.get("status")
+        if status not in ASSESSMENT_STATUSES:
+            errors.append(f"{label}.status must be pass or fail")
+        raw_findings = raw_axis.get("findings")
+        findings: list[Mapping[str, Any]] = []
+        if not isinstance(raw_findings, list):
+            errors.append(f"{label}.findings must be a list")
+        else:
+            findings = [
+                _validate_finding(item, category, index, errors)
+                for index, item in enumerate(raw_findings)
+            ]
+        if status == "pass" and findings:
+            errors.append(f"{label} pass must not contain findings")
+        if status == "fail" and not findings:
+            errors.append(f"{label} fail requires findings")
+        normalized[category] = {
+            "status": status,
+            "findings": findings,
+        }
+        all_findings.extend(findings)
+        finding_ids.extend(finding["id"] for finding in findings if "id" in finding)
+    if len(finding_ids) != len(set(finding_ids)):
+        errors.append("assurance finding ids must be unique")
+    return normalized, all_findings
+
+
 def validate_report(value: Any) -> ArtifactValidation:
     if not isinstance(value, dict):
-        return ArtifactValidation(False, ("review report must be an object",), {})
+        return ArtifactValidation(
+            False,
+            ("assurance report must be an object",),
+            {},
+        )
     errors: list[str] = []
-    _exact_fields(value, REPORT_FIELDS, "review report", errors)
+    _exact_fields(value, REPORT_FIELDS, "assurance report", errors)
     if value.get("schema_version") != REPORT_SCHEMA_VERSION:
-        errors.append(f"review report schema_version must be {REPORT_SCHEMA_VERSION}")
+        errors.append(
+            f"assurance report schema_version must be {REPORT_SCHEMA_VERSION}"
+        )
     if not _valid_sha256(value.get("request_sha256")):
-        errors.append("review report request_sha256 must be a lowercase SHA-256")
+        errors.append("assurance report request_sha256 must be a lowercase SHA-256")
     if not _valid_sha256(value.get("scenario_result_sha256")):
         errors.append(
-            "review report scenario_result_sha256 must be a lowercase SHA-256"
+            "assurance report scenario_result_sha256 must be a lowercase SHA-256"
         )
-    verdict = value.get("verdict")
-    if verdict not in VERDICTS:
-        errors.append(f"unsupported review verdict: {verdict}")
-    raw_findings = value.get("findings")
-    findings: list[Mapping[str, Any]] = []
-    if not isinstance(raw_findings, list):
-        errors.append("review report findings must be a list")
-    else:
-        findings = [
-            _validate_finding(item, index, errors)
-            for index, item in enumerate(raw_findings)
-        ]
-    ids = [item.get("id") for item in findings if item.get("id") is not None]
-    if len(ids) != len(set(ids)):
-        errors.append("review report finding ids must be unique")
-    if verdict == "actionable" and not findings:
-        errors.append("actionable review requires at least one finding")
-    if verdict == "clean" and findings:
-        errors.append("clean review must not contain findings")
+    normalized_assessments, _ = _validate_assessments(
+        value.get("assessments"),
+        errors,
+    )
     normalized = {field: value[field] for field in REPORT_FIELDS if field in value}
-    if "findings" in normalized:
-        normalized["findings"] = findings
+    if "assessments" in normalized:
+        normalized["assessments"] = normalized_assessments
     return ArtifactValidation(
         not errors,
         tuple(dict.fromkeys(errors)),
@@ -231,7 +334,7 @@ def validate_report(value: Any) -> ArtifactValidation:
 
 
 def load_run(task_dir: Path) -> LoopResult:
-    return load_managed_run(REVIEW_RUN, Path(task_dir))
+    return load_managed_run(ASSURANCE_RUN, Path(task_dir))
 
 
 def start_run(
@@ -243,7 +346,7 @@ def start_run(
     if not validation.allowed:
         return LoopResult(False, validation.errors, {})
     return start_managed_run(
-        REVIEW_RUN,
+        ASSURANCE_RUN,
         Path(task_dir),
         validation.value,
         max_iterations,
@@ -256,20 +359,23 @@ def transition_run(task_dir: Path, next_phase: str) -> LoopResult:
     if not loaded.allowed:
         return loaded
     allowed_edges = {
-        ("inspect", "review"),
+        ("inspect", "assess"),
         ("address", "verify"),
     }
     edge = (loaded.state["status"], next_phase)
     if edge not in allowed_edges:
         return LoopResult(
             False,
-            (f"review transition {edge[0]} -> {edge[1]} requires a guarded command",),
+            (
+                f"assurance transition {edge[0]} -> {edge[1]} "
+                "requires a guarded command",
+            ),
             loaded.state,
         )
-    return transition_managed_run(REVIEW_RUN, task, next_phase)
+    return transition_managed_run(ASSURANCE_RUN, task, next_phase)
 
 
-def submit_review(
+def submit_assessment(
     task_dir: Path,
     project_root: Path,
     report: Any,
@@ -278,10 +384,10 @@ def submit_review(
     loaded = load_run(task)
     if not loaded.allowed:
         return loaded
-    if loaded.state["status"] != "review":
+    if loaded.state["status"] != "assess":
         return LoopResult(
             False,
-            ("review run must be in review phase",),
+            ("assurance run must be in assess phase",),
             loaded.state,
         )
     validation = validate_report(report)
@@ -291,10 +397,15 @@ def submit_review(
     if value["request_sha256"] != loaded.state["request_sha256"]:
         return LoopResult(
             False,
-            ("review report request_sha256 does not match the active run",),
+            ("assurance report request_sha256 does not match the active run",),
             loaded.state,
         )
-    clean = value["verdict"] == "clean"
+    failed_categories = [
+        category
+        for category, assessment in value["assessments"].items()
+        if assessment["status"] == "fail"
+    ]
+    clean = not failed_categories
     receipt = validate_scenario_receipt(
         task,
         Path(project_root),
@@ -303,17 +414,37 @@ def submit_review(
     )
     if not receipt.allowed:
         return LoopResult(False, receipt.errors, loaded.state)
-    path = task / "iterations" / f"{loaded.state['iteration']:03d}" / "review.json"
+    path = task / "iterations" / f"{loaded.state['iteration']:03d}" / "assurance.json"
     try:
         atomic_write(path, canonical_json(value))
     except OSError as exc:
         return LoopResult(
             False,
-            (f"cannot persist review report: {exc}",),
+            (f"cannot persist assurance report: {exc}",),
             loaded.state,
         )
-    target = "review-clean" if clean else "address"
-    return transition_managed_run(REVIEW_RUN, task, target)
+    if clean:
+        target = "completed"
+    else:
+        request_value, request_errors = _read_json_artifact(
+            task / REQUEST_FILENAME,
+            "assurance request",
+        )
+        if request_errors:
+            return LoopResult(False, request_errors, loaded.state)
+        request_validation = validate_request(request_value)
+        if not request_validation.allowed:
+            return LoopResult(
+                False,
+                request_validation.errors,
+                loaded.state,
+            )
+        target = (
+            "address"
+            if "modify-worktree" in request_validation.value["permissions"]
+            else "changes-requested"
+        )
+    return transition_managed_run(ASSURANCE_RUN, task, target)
 
 
 def verify_run(task_dir: Path, project_root: Path) -> LoopResult:
@@ -324,17 +455,155 @@ def verify_run(task_dir: Path, project_root: Path) -> LoopResult:
     if loaded.state["status"] != "verify":
         return LoopResult(
             False,
-            ("review run must be in verify phase",),
+            ("assurance run must be in verify phase",),
             loaded.state,
         )
     completion = validate_completion(task, Path(project_root))
     if not completion.allowed:
         return LoopResult(False, completion.errors, loaded.state)
-    return transition_managed_run(REVIEW_RUN, task, "review")
+    return transition_managed_run(ASSURANCE_RUN, task, "assess")
 
 
 def terminate_run(task_dir: Path, status: str) -> LoopResult:
-    return terminate_managed_run(REVIEW_RUN, Path(task_dir), status)
+    return terminate_managed_run(ASSURANCE_RUN, Path(task_dir), status)
+
+
+def build_subloop_result(
+    invocation: Mapping[str, Any],
+    raw_assessments: Any,
+    *,
+    source_snapshot_after_sha256: str,
+) -> Mapping[str, Any]:
+    if (
+        not isinstance(invocation, dict)
+        or invocation.get("pack") != PACK_PROFILE.name
+        or invocation.get("mode") != "subloop"
+    ):
+        raise ValueError("Assurance Subloop requires a bound assurance invocation")
+    errors: list[str] = []
+    normalized, findings = _validate_assessments(raw_assessments, errors)
+    if errors:
+        raise ValueError("; ".join(dict.fromkeys(errors)))
+    failed = [
+        category
+        for category, assessment in normalized.items()
+        if assessment["status"] == "fail"
+    ]
+    finding_refs = [f"assurance-report.json#{finding['id']}" for finding in findings]
+    status = "changes-requested" if failed else "completed"
+    summary = (
+        "Assurance found changes required in: " + ", ".join(failed)
+        if failed
+        else "All assurance assessment categories passed."
+    )
+    return {
+        "schema_version": 1,
+        "invocation_id": invocation["invocation_id"],
+        "invocation_sha256": content_sha256(canonical_json(invocation)),
+        "pack": PACK_PROFILE.name,
+        "status": status,
+        "summary": summary,
+        "finding_refs": finding_refs,
+        "changed_paths": [],
+        "evidence_refs": ["assurance-report.json"],
+        "budget_usage": {"iterations_used": 1},
+        "completion_receipt": None,
+        "decision": None,
+        "source_snapshot_after_sha256": source_snapshot_after_sha256,
+    }
+
+
+def _persist_once_or_match(
+    path: Path,
+    content: bytes,
+    label: str,
+) -> tuple[str, ...]:
+    if path.is_symlink():
+        return (f"{label} must not be a symlink",)
+    try:
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        try:
+            atomic_write(path, content)
+        except OSError as exc:
+            return (f"cannot persist {label}: {exc}",)
+        return ()
+    except OSError as exc:
+        return (f"cannot read {label}: {exc}",)
+    if existing != content:
+        return (f"{label} already exists with different content",)
+    return ()
+
+
+def prepare_subloop_result(
+    child_dir: Path,
+    project_root: Path,
+    raw_assessments: Any,
+) -> LoopResult:
+    child = Path(child_dir)
+    try:
+        root = Path(project_root).resolve(strict=True)
+        resolved = child.resolve(strict=True)
+        relative = resolved.relative_to(root)
+    except (OSError, ValueError) as exc:
+        return LoopResult(
+            False,
+            (f"cannot resolve Assurance Subloop: {exc}",),
+            {},
+        )
+    if (
+        len(relative.parts) != 4
+        or relative.parts[0] != "_workspace"
+        or relative.parts[2] != "subloops"
+        or child.is_symlink()
+        or child.parent.is_symlink()
+    ):
+        return LoopResult(
+            False,
+            ("Assurance Subloop must be nested under one direct root task",),
+            {},
+        )
+    invocation, invocation_errors = _read_json_artifact(
+        resolved / "invocation.json",
+        "Assurance Subloop invocation",
+    )
+    if invocation_errors:
+        return LoopResult(False, invocation_errors, {})
+    fingerprint, fingerprint_errors = source_fingerprint(root)
+    if fingerprint is None:
+        return LoopResult(False, fingerprint_errors, {})
+    errors: list[str] = []
+    normalized, _ = _validate_assessments(raw_assessments, errors)
+    if errors:
+        return LoopResult(False, tuple(dict.fromkeys(errors)), {})
+    try:
+        result = build_subloop_result(
+            invocation,
+            normalized,
+            source_snapshot_after_sha256=fingerprint,
+        )
+    except ValueError as exc:
+        return LoopResult(False, (str(exc),), {})
+    report = {
+        "schema_version": 1,
+        "assessments": normalized,
+    }
+    for path, content, label in (
+        (
+            resolved / "assurance-report.json",
+            canonical_json(report),
+            "Assurance Subloop report",
+        ),
+        (
+            resolved / "result-input.json",
+            canonical_json(result),
+            "Assurance Subloop result",
+        ),
+    ):
+        persist_errors = _persist_once_or_match(path, content, label)
+        if persist_errors:
+            return LoopResult(False, persist_errors, {})
+    return LoopResult(True, (), result)
 
 
 def _read_json_artifact(
@@ -394,7 +663,7 @@ def main() -> int:
 
     transition_parser = subparsers.add_parser("transition")
     transition_parser.add_argument("task", type=Path)
-    transition_parser.add_argument("next_phase", choices=("review", "verify"))
+    transition_parser.add_argument("next_phase", choices=("assess", "verify"))
     transition_parser.add_argument("--project-root", required=True, type=Path)
     transition_parser.add_argument("--json", action="store_true")
 
@@ -413,7 +682,7 @@ def main() -> int:
     terminate.add_argument("task", type=Path)
     terminate.add_argument(
         "status",
-        choices=("needs-clarification", "blocked"),
+        choices=("needs-decision", "blocked"),
     )
     terminate.add_argument("--project-root", required=True, type=Path)
     terminate.add_argument("--json", action="store_true")
@@ -423,9 +692,31 @@ def main() -> int:
     status.add_argument("--project-root", required=True, type=Path)
     status.add_argument("--json", action="store_true")
 
+    subloop = subparsers.add_parser("prepare-subloop-result")
+    subloop.add_argument("task", type=Path)
+    subloop.add_argument("--assessment", required=True, type=Path)
+    subloop.add_argument("--project-root", required=True, type=Path)
+    subloop.add_argument("--json", action="store_true")
+
     args = parser.parse_args()
+    if args.operation == "prepare-subloop-result":
+        value, errors = _read_json_artifact(
+            args.assessment,
+            "Assurance Subloop assessment",
+        )
+        result = (
+            LoopResult(False, errors, {})
+            if errors
+            else prepare_subloop_result(
+                args.task,
+                args.project_root,
+                value,
+            )
+        )
+        _print_payload(result, args.json, args.task)
+        return 0 if result.allowed else 1
     if args.operation == "status" and args.task is None:
-        task, errors = resolve_managed_run(REVIEW_RUN, args.project_root)
+        task, errors = resolve_managed_run(ASSURANCE_RUN, args.project_root)
         result = LoopResult(False, errors, {}) if task is None else load_run(task)
         _print_payload(result, args.json, task)
         return 0 if result.allowed else 1
@@ -437,7 +728,10 @@ def main() -> int:
     assert task is not None
 
     if args.operation == "start":
-        value, errors = _read_json_artifact(args.request, "review request")
+        value, errors = _read_json_artifact(
+            args.request,
+            "assurance request",
+        )
         result = (
             LoopResult(False, errors, {})
             if errors
@@ -446,11 +740,14 @@ def main() -> int:
     elif args.operation == "transition":
         result = transition_run(task, args.next_phase)
     elif args.operation == "submit":
-        value, errors = _read_json_artifact(args.report, "review report")
+        value, errors = _read_json_artifact(
+            args.report,
+            "assurance report",
+        )
         result = (
             LoopResult(False, errors, {})
             if errors
-            else submit_review(task, args.project_root, value)
+            else submit_assessment(task, args.project_root, value)
         )
     elif args.operation == "verify":
         result = verify_run(task, args.project_root)

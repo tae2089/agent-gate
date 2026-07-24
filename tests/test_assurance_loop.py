@@ -1,4 +1,4 @@
-"""Contract tests for the deterministic assurance Loop Pack."""
+"""Contract tests for the deterministic Assurance Loop Pack."""
 
 from __future__ import annotations
 
@@ -18,82 +18,149 @@ from gate_helpers import IMPLEMENTATION, TASK, init_git_project  # noqa: E402
 
 import assurance_loop  # noqa: E402
 import scenario_gate  # noqa: E402
+from subloop_contract import validate_result  # noqa: E402
+
+CATEGORIES = (
+    "abstraction_complexity",
+    "code_quality_module_responsibility",
+    "failure_boundary_compatibility",
+    "missing_or_overimplemented_requirements",
+    "requirements_conformance",
+    "test_quality_regression_prevention",
+)
 
 
 def request(**overrides):
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "manual",
-        "source_ref": "conversation:review-current-change",
-        "request": "Review and address the current change until it is clean.",
+        "source_ref": "conversation:assurance-current-change",
+        "request": "Assess the current change and address findings if authorized.",
         "target": "HEAD compared with main",
-        "scope": ["changed production code", "related tests"],
-        "evidence": ["The user requested an iterative review."],
+        "requirements": ["AC-1", "AC-2"],
+        "scope": ["src", "tests"],
+        "permissions": [
+            "read-repository",
+            "modify-worktree",
+            "run-local-verification",
+        ],
+        "evidence": ["The user requested implementation assurance."],
     }
     value.update(overrides)
     return value
 
 
-def finding(**overrides):
+def finding(category="requirements_conformance", **overrides):
     value = {
-        "id": "R-001",
+        "id": "A-001",
+        "category": category,
         "severity": "P1",
-        "title": "Observable defect",
-        "evidence": ["src/app.txt demonstrates the defect."],
-        "action": "Correct the behavior and add a regression test.",
+        "title": "Observable requirement gap",
+        "requirement_refs": ["AC-1"],
+        "evidence": ["src/app.txt does not implement AC-1."],
+        "action": "Implement AC-1 and add a regression test.",
     }
     value.update(overrides)
     return value
 
 
-class ReviewValidationTest(unittest.TestCase):
-    def test_request_requires_manual_authority_and_exact_fields(self):
+def assessments(failed=None, **finding_overrides):
+    value = {category: {"status": "pass", "findings": []} for category in CATEGORIES}
+    if failed is not None:
+        details = {"category": failed, **finding_overrides}
+        value[failed] = {
+            "status": "fail",
+            "findings": [finding(**details)],
+        }
+    return value
+
+
+class AssuranceValidationTest(unittest.TestCase):
+    def test_profile_declares_standalone_and_subloop_modes(self):
+        self.assertTrue(assurance_loop.PACK_PROFILE.supports("standalone"))
+        self.assertTrue(assurance_loop.PACK_PROFILE.supports("subloop"))
+
+    def test_request_requires_manual_authority_and_exact_root_context(self):
         valid = assurance_loop.validate_request(request())
         external = assurance_loop.validate_request(request(source="github"))
         unknown = assurance_loop.validate_request(request(provider="github"))
-        empty_scope = assurance_loop.validate_request(request(scope=[]))
+        unsupported_permission = assurance_loop.validate_request(
+            request(permissions=["read-repository", "push"])
+        )
 
         self.assertTrue(valid.allowed, valid.errors)
         self.assertFalse(external.allowed)
         self.assertIn("source must be manual", " ".join(external.errors))
         self.assertFalse(unknown.allowed)
-        self.assertFalse(empty_scope.allowed)
+        self.assertFalse(unsupported_permission.allowed)
 
-    def test_report_verdict_and_findings_must_agree(self):
+    def test_report_requires_all_six_independent_assessment_categories(self):
         base = {
-            "schema_version": 1,
+            "schema_version": 2,
             "request_sha256": "a" * 64,
             "scenario_result_sha256": "b" * 64,
         }
-        actionable = assurance_loop.validate_report(
-            {**base, "verdict": "actionable", "findings": [finding()]}
-        )
-        clean = assurance_loop.validate_report(
-            {**base, "verdict": "clean", "findings": []}
-        )
-        contradictory = assurance_loop.validate_report(
-            {**base, "verdict": "clean", "findings": [finding()]}
-        )
-        duplicate = assurance_loop.validate_report(
+        passing = assurance_loop.validate_report({**base, "assessments": assessments()})
+        failing = assurance_loop.validate_report(
             {
                 **base,
-                "verdict": "actionable",
-                "findings": [finding(), finding(title="Second")],
+                "assessments": assessments("missing_or_overimplemented_requirements"),
+            }
+        )
+        missing = assessments()
+        del missing["test_quality_regression_prevention"]
+        missing_result = assurance_loop.validate_report(
+            {**base, "assessments": missing}
+        )
+        contradictory = assessments()
+        contradictory["requirements_conformance"] = {
+            "status": "pass",
+            "findings": [finding()],
+        }
+        contradictory_result = assurance_loop.validate_report(
+            {**base, "assessments": contradictory}
+        )
+
+        self.assertTrue(passing.allowed, passing.errors)
+        self.assertTrue(failing.allowed, failing.errors)
+        self.assertFalse(missing_result.allowed)
+        self.assertFalse(contradictory_result.allowed)
+
+    def test_findings_are_category_requirement_and_source_bound(self):
+        base = {
+            "schema_version": 2,
+            "request_sha256": "a" * 64,
+            "scenario_result_sha256": "b" * 64,
+        }
+        wrong_category = assurance_loop.validate_report(
+            {
+                **base,
+                "assessments": assessments(
+                    "requirements_conformance",
+                    category="abstraction_complexity",
+                ),
+            }
+        )
+        no_requirement = assurance_loop.validate_report(
+            {
+                **base,
+                "assessments": assessments(
+                    "requirements_conformance",
+                    requirement_refs=[],
+                ),
             }
         )
 
-        self.assertTrue(actionable.allowed, actionable.errors)
-        self.assertTrue(clean.allowed, clean.errors)
-        self.assertFalse(contradictory.allowed)
-        self.assertFalse(duplicate.allowed)
+        self.assertFalse(wrong_category.allowed)
+        self.assertFalse(no_requirement.allowed)
 
 
-class ReviewRunTest(unittest.TestCase):
+class AssuranceRunTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.project = Path(self.temp.name)
         init_git_project(self.project)
-        self.task = self.project / "_workspace" / "review"
+        self.task = self.project / "_workspace" / "assurance"
         self.task.mkdir(parents=True)
         (self.task / "task.md").write_text(TASK, encoding="utf-8")
         (self.task / "implementation.md").write_text(
@@ -107,14 +174,14 @@ class ReviewRunTest(unittest.TestCase):
                     "schema_version": 1,
                     "scenarios": [
                         {
-                            "id": "S-REVIEW-UNIT",
-                            "title": "Requested review checks pass",
+                            "id": "S-ASSURANCE-UNIT",
+                            "title": "Assured repository checks pass",
                             "command": [
                                 sys.executable,
                                 "-c",
                                 "raise SystemExit(0)",
                             ],
-                            "given": ["the reviewed change"],
+                            "given": ["the assured change"],
                             "when": ["the repository check runs"],
                             "then": ["the process exits successfully"],
                         }
@@ -127,156 +194,112 @@ class ReviewRunTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def start_review(self, max_iterations=2):
+    def start_assurance(self, *, editable=True, max_iterations=2):
+        permissions = (
+            request()["permissions"]
+            if editable
+            else ["read-repository", "run-local-verification"]
+        )
         result = assurance_loop.start_run(
             self.task,
-            request(),
+            request(permissions=permissions),
             max_iterations=max_iterations,
         )
         self.assertTrue(result.allowed, result.errors)
-        self.assertTrue(assurance_loop.transition_run(self.task, "review").allowed)
+        self.assertTrue(assurance_loop.transition_run(self.task, "assess").allowed)
         return result
 
-    def report(self, verdict, findings):
+    def report(self, failed=None, **finding_overrides):
         state = assurance_loop.load_run(self.task)
         content = (self.task / "scenario-result.json").read_bytes()
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "request_sha256": state.state["request_sha256"],
             "scenario_result_sha256": hashlib.sha256(content).hexdigest(),
-            "verdict": verdict,
-            "findings": findings,
+            "assessments": assessments(failed, **finding_overrides),
         }
 
-    def set_scenario_exit(self, code):
-        contract = json.loads(self.contract_path.read_text(encoding="utf-8"))
-        contract["scenarios"][0]["command"] = [
-            sys.executable,
-            "-c",
-            f"raise SystemExit({code})",
-        ]
-        self.contract_path.write_text(json.dumps(contract), encoding="utf-8")
-
-    def test_start_persists_inspect_state_and_active_pointer(self):
+    def test_start_uses_root_pointer_and_assurance_artifacts(self):
         result = assurance_loop.start_run(self.task, request())
 
         self.assertTrue(result.allowed, result.errors)
         self.assertEqual(result.state["status"], "inspect")
-        self.assertEqual(len(result.state["request_sha256"]), 64)
-        self.assertTrue((self.task / "review-request.json").is_file())
+        self.assertTrue((self.task / "assurance-request.json").is_file())
         self.assertEqual(
-            (self.task.parent / ".active-review").read_text(encoding="utf-8"),
-            "_workspace/review\n",
+            (self.task.parent / ".active-run").read_text(encoding="utf-8"),
+            "_workspace/assurance\n",
         )
+        self.assertFalse((self.task.parent / ".active-assurance").exists())
 
-    def test_actionable_report_can_capture_current_failed_scenarios(self):
-        self.start_review()
-        self.set_scenario_exit(7)
+    def test_read_only_finding_returns_changes_requested_without_address(self):
+        self.start_assurance(editable=False)
         self.assertTrue(
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
 
-        submitted = assurance_loop.submit_review(
+        submitted = assurance_loop.submit_assessment(
             self.task,
             self.project,
-            self.report("actionable", [finding()]),
+            self.report("requirements_conformance"),
         )
 
         self.assertTrue(submitted.allowed, submitted.errors)
-        self.assertEqual(submitted.state["status"], "address")
-        self.assertTrue((self.task / "iterations" / "001" / "review.json").is_file())
+        self.assertEqual(submitted.state["status"], "changes-requested")
+        self.assertFalse((self.task / "iterations" / "001" / "review.json").exists())
+        self.assertTrue((self.task / "iterations" / "001" / "assurance.json").is_file())
 
-    def test_clean_report_requires_current_100_percent_completion(self):
-        self.start_review()
-        missing = assurance_loop.submit_review(
+    def test_editable_finding_addresses_verifies_and_reassesses(self):
+        self.start_assurance(editable=True, max_iterations=2)
+        self.assertTrue(
+            scenario_gate.run_scenarios(self.task, self.project).result_written
+        )
+        actionable = assurance_loop.submit_assessment(
+            self.task,
+            self.project,
+            self.report("failure_boundary_compatibility"),
+        )
+        self.assertEqual(actionable.state["status"], "address")
+        self.assertTrue(assurance_loop.transition_run(self.task, "verify").allowed)
+        self.assertTrue(
+            scenario_gate.run_scenarios(self.task, self.project).result_written
+        )
+
+        reassess = assurance_loop.verify_run(self.task, self.project)
+
+        self.assertTrue(reassess.allowed, reassess.errors)
+        self.assertEqual(reassess.state["status"], "assess")
+        self.assertEqual(reassess.state["iteration"], 2)
+
+    def test_passing_assessment_requires_current_completion(self):
+        self.start_assurance()
+        missing = assurance_loop.submit_assessment(
             self.task,
             self.project,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "request_sha256": assurance_loop.load_run(self.task).state[
                     "request_sha256"
                 ],
                 "scenario_result_sha256": "a" * 64,
-                "verdict": "clean",
-                "findings": [],
+                "assessments": assessments(),
             },
         )
         self.assertFalse(missing.allowed)
-        self.assertEqual(missing.state["status"], "review")
+        self.assertEqual(missing.state["status"], "assess")
 
         self.assertTrue(
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
-        clean = assurance_loop.submit_review(
+        completed = assurance_loop.submit_assessment(
             self.task,
             self.project,
-            self.report("clean", []),
+            self.report(),
         )
 
-        self.assertTrue(clean.allowed, clean.errors)
-        self.assertEqual(clean.state["status"], "review-clean")
+        self.assertTrue(completed.allowed, completed.errors)
+        self.assertEqual(completed.state["status"], "completed")
 
-    def test_stale_report_cannot_change_state(self):
-        self.start_review()
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        report = self.report("actionable", [finding()])
-        (self.project / "src" / "app.txt").write_text(
-            "changed\n",
-            encoding="utf-8",
-        )
-
-        result = assurance_loop.submit_review(
-            self.task,
-            self.project,
-            report,
-        )
-
-        self.assertFalse(result.allowed)
-        self.assertEqual(result.state["status"], "review")
-        self.assertIn("source_fingerprint is stale", " ".join(result.errors))
-
-    def test_verify_rechecks_completion_and_consumes_retry_budget(self):
-        self.start_review(max_iterations=2)
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        self.assertTrue(
-            assurance_loop.submit_review(
-                self.task,
-                self.project,
-                self.report("actionable", [finding()]),
-            ).allowed
-        )
-        self.assertTrue(assurance_loop.transition_run(self.task, "verify").allowed)
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-
-        retry = assurance_loop.verify_run(self.task, self.project)
-
-        self.assertTrue(retry.allowed, retry.errors)
-        self.assertEqual(retry.state["status"], "review")
-        self.assertEqual(retry.state["iteration"], 2)
-
-        self.assertTrue(
-            assurance_loop.submit_review(
-                self.task,
-                self.project,
-                self.report("actionable", [finding(id="R-002")]),
-            ).allowed
-        )
-        self.assertTrue(assurance_loop.transition_run(self.task, "verify").allowed)
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        exhausted = assurance_loop.verify_run(self.task, self.project)
-
-        self.assertTrue(exhausted.allowed, exhausted.errors)
-        self.assertEqual(exhausted.state["status"], "budget-exhausted")
-
-    def test_cli_start_and_status_use_the_direct_workspace_task(self):
+    def test_cli_start_and_status_use_the_root_workspace_task(self):
         input_path = self.task / "request-input.json"
         input_path.write_text(json.dumps(request()), encoding="utf-8")
         common = ["--project-root", str(self.project), "--json"]
@@ -285,7 +308,7 @@ class ReviewRunTest(unittest.TestCase):
                 sys.executable,
                 str(ROOT / "scripts" / "assurance_loop.py"),
                 "start",
-                "_workspace/review",
+                "_workspace/assurance",
                 "--request",
                 str(input_path),
                 *common,
@@ -310,9 +333,48 @@ class ReviewRunTest(unittest.TestCase):
 
         self.assertEqual(started.returncode, 0, started.stderr)
         self.assertEqual(status.returncode, 0, status.stderr)
-        payload = json.loads(status.stdout)
-        self.assertEqual(payload["state"]["status"], "inspect")
-        self.assertEqual(payload["task"], str(self.task.resolve()))
+        self.assertEqual(json.loads(status.stdout)["state"]["status"], "inspect")
+
+
+class AssuranceSubloopTest(unittest.TestCase):
+    def test_assessment_maps_to_common_parent_result_without_dispatch(self):
+        invocation = {
+            "schema_version": 1,
+            "invocation_id": "subloop-001",
+            "pack": "assurance-loop",
+            "mode": "subloop",
+            "parent": {
+                "run_id": "evolution-001",
+                "task_ref": "_workspace/evolution-example",
+                "state_sha256": "a" * 64,
+            },
+            "objective": "Assess AC-1.",
+            "requirements": ["AC-1"],
+            "scope": ["src"],
+            "source_snapshot": {
+                "ref": "subloops/subloop-001/source-snapshot.json",
+                "sha256": "b" * 64,
+            },
+            "permissions": ["read-repository"],
+            "budget": {"iteration_limit": 1},
+            "completion_task_ref": "_workspace/evolution-example",
+        }
+        source_after = "c" * 64
+
+        result = assurance_loop.build_subloop_result(
+            invocation,
+            assessments("abstraction_complexity"),
+            source_snapshot_after_sha256=source_after,
+        )
+        validated = validate_result(
+            result,
+            invocation,
+            current_source_snapshot_sha256=source_after,
+        )
+
+        self.assertEqual(result["status"], "changes-requested")
+        self.assertTrue(validated.allowed, validated.errors)
+        self.assertNotIn("invoke-subloop", json.dumps(result))
 
 
 if __name__ == "__main__":

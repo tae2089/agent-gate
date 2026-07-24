@@ -1,4 +1,4 @@
 interface:
-  display_name: "Review Loop"
-  short_description: "Iteratively review and address actionable findings"
-  default_prompt: "Use $assurance-loop to assess and address the current change until no actionable findings remain."
+  display_name: "Assurance Loop"
+  short_description: "Assess requirements, risks, design, and regression protection"
+  default_prompt: "Use $assurance-loop to assess this change against its requirements and return a bounded assurance result."
