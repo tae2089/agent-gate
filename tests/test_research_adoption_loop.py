@@ -655,13 +655,13 @@ class ResearchAdoptionRunTest(unittest.TestCase):
         result = research_adoption_loop.build_subloop_result(
             invocation,
             artifact,
-            source_snapshot_after_sha256="c" * 64,
+            source_snapshot_after_sha256="b" * 64,
         )
 
         validated = validate_result(
             result,
             invocation,
-            current_source_snapshot_sha256="c" * 64,
+            current_source_snapshot_sha256="b" * 64,
         )
 
         self.assertEqual(result["status"], "needs-decision")

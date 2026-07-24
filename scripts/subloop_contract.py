@@ -444,10 +444,32 @@ def validate_result(
     )
 
     permissions = invocation.get("permissions")
+    invocation_snapshot = invocation.get("source_snapshot")
+    source_before = (
+        invocation_snapshot.get("sha256")
+        if isinstance(invocation_snapshot, dict)
+        else None
+    )
+    source_after = value.get("source_snapshot_after_sha256")
+    source_changed = (
+        _valid_sha256(source_before)
+        and _valid_sha256(source_after)
+        and source_before != source_after
+    )
     if changed_paths and (
         not isinstance(permissions, list) or "modify-worktree" not in permissions
     ):
         errors.append("Subloop result has changes without modify-worktree permission")
+    if source_changed and (
+        not isinstance(permissions, list) or "modify-worktree" not in permissions
+    ):
+        errors.append(
+            "Subloop source changed without modify-worktree permission"
+        )
+    if source_changed and not changed_paths:
+        errors.append("Subloop source changed without declared changed_paths")
+    if not source_changed and changed_paths:
+        errors.append("Subloop changed_paths claim no source snapshot change")
     scope = invocation.get("scope")
     if (
         changed_paths

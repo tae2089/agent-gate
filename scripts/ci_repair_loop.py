@@ -61,14 +61,14 @@ CI_REPAIR_DEFINITION = LoopDefinition(
     iteration_transitions=frozenset({("verify", "repair")}),
     budget_terminal="budget-exhausted",
 )
-ACTIVE_CI_REPAIR_FILENAME = ".active-run"
+ACTIVE_RUN_FILENAME = ".active-run"
 FAILURE_FILENAME = "ci-failure.json"
 STATE_FILENAME = "ci-repair-state.json"
 CI_REPAIR_RUN = ManagedLoopDefinition(
     loop=CI_REPAIR_DEFINITION,
     input_filename=FAILURE_FILENAME,
     state_filename=STATE_FILENAME,
-    active_pointer_filename=ACTIVE_CI_REPAIR_FILENAME,
+    active_pointer_filename=ACTIVE_RUN_FILENAME,
     input_hash_field="failure_sha256",
     initial_status="inspect",
     interrupt_terminals=frozenset({"needs-clarification", "blocked"}),

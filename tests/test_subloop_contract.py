@@ -87,7 +87,7 @@ def result(value, **overrides):
             "scenario_result_sha256": "c" * 64,
         },
         "decision": None,
-        "source_snapshot_after_sha256": "d" * 64,
+        "source_snapshot_after_sha256": value["source_snapshot"]["sha256"],
     }
     output.update(overrides)
     return output
@@ -231,7 +231,7 @@ class ResultValidationTest(unittest.TestCase):
     def setUp(self):
         self.invocation = invocation()
 
-    def validate(self, value, current_source="d" * 64):
+    def validate(self, value, current_source="b" * 64):
         return subloop_contract.validate_result(
             value,
             self.invocation,
@@ -303,17 +303,43 @@ class ResultValidationTest(unittest.TestCase):
             editable,
             changed_paths=["docs/design.md"],
             completion_receipt=None,
+            source_snapshot_after_sha256="d" * 64,
         )
         inside = result(
             editable,
             changed_paths=["src/auth/session.py", "tests/test_auth.py"],
+            source_snapshot_after_sha256="d" * 64,
         )
 
         self.invocation = read_only
         self.assertFalse(self.validate(unauthorized).allowed)
         self.invocation = editable
-        self.assertFalse(self.validate(outside).allowed)
-        self.assertTrue(self.validate(inside).allowed)
+        self.assertFalse(self.validate(outside, "d" * 64).allowed)
+        self.assertTrue(self.validate(inside, "d" * 64).allowed)
+
+    def test_source_changes_require_authorized_changed_paths(self):
+        read_only = result(
+            self.invocation,
+            source_snapshot_after_sha256="d" * 64,
+            completion_receipt=None,
+        )
+        editable = copy.deepcopy(self.invocation)
+        editable["permissions"].append("modify-worktree")
+        omitted = result(
+            editable,
+            source_snapshot_after_sha256="d" * 64,
+            completion_receipt=None,
+        )
+        false_claim = result(
+            editable,
+            changed_paths=["src/auth/session.py"],
+            completion_receipt=None,
+        )
+
+        self.assertFalse(self.validate(read_only, "d" * 64).allowed)
+        self.invocation = editable
+        self.assertFalse(self.validate(omitted, "d" * 64).allowed)
+        self.assertFalse(self.validate(false_claim).allowed)
 
     def test_status_specific_requirements_and_budget_are_enforced(self):
         missing_findings = result(

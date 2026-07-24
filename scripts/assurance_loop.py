@@ -32,7 +32,7 @@ from scenario_gate import (
     validate_completion,
     validate_scenario_receipt,
 )
-from subloop_contract import PackProfile, SUBLOOP_PERMISSIONS
+from subloop_contract import PackProfile, SUBLOOP_PERMISSIONS, validate_result
 
 REQUEST_SCHEMA_VERSION = 2
 REPORT_SCHEMA_VERSION = 2
@@ -473,6 +473,7 @@ def build_subloop_result(
     raw_assessments: Any,
     *,
     source_snapshot_after_sha256: str,
+    changed_paths: list[str] | tuple[str, ...] = (),
 ) -> Mapping[str, Any]:
     if (
         not isinstance(invocation, dict)
@@ -504,7 +505,7 @@ def build_subloop_result(
         "status": status,
         "summary": summary,
         "finding_refs": finding_refs,
-        "changed_paths": [],
+        "changed_paths": list(changed_paths),
         "evidence_refs": ["assurance-report.json"],
         "budget_usage": {"iterations_used": 1},
         "completion_receipt": None,
@@ -539,6 +540,7 @@ def prepare_subloop_result(
     child_dir: Path,
     project_root: Path,
     raw_assessments: Any,
+    changed_paths: list[str] | tuple[str, ...] = (),
 ) -> LoopResult:
     child = Path(child_dir)
     try:
@@ -581,9 +583,17 @@ def prepare_subloop_result(
             invocation,
             normalized,
             source_snapshot_after_sha256=fingerprint,
+            changed_paths=changed_paths,
         )
     except ValueError as exc:
         return LoopResult(False, (str(exc),), {})
+    validation = validate_result(
+        result,
+        invocation,
+        current_source_snapshot_sha256=fingerprint,
+    )
+    if not validation.allowed:
+        return LoopResult(False, validation.errors, {})
     report = {
         "schema_version": 1,
         "assessments": normalized,
@@ -596,14 +606,14 @@ def prepare_subloop_result(
         ),
         (
             resolved / "result-input.json",
-            canonical_json(result),
+            canonical_json(validation.value),
             "Assurance Subloop result",
         ),
     ):
         persist_errors = _persist_once_or_match(path, content, label)
         if persist_errors:
             return LoopResult(False, persist_errors, {})
-    return LoopResult(True, (), result)
+    return LoopResult(True, (), validation.value)
 
 
 def _read_json_artifact(
@@ -695,6 +705,7 @@ def main() -> int:
     subloop = subparsers.add_parser("prepare-subloop-result")
     subloop.add_argument("task", type=Path)
     subloop.add_argument("--assessment", required=True, type=Path)
+    subloop.add_argument("--changed-path", action="append", default=[])
     subloop.add_argument("--project-root", required=True, type=Path)
     subloop.add_argument("--json", action="store_true")
 
@@ -711,6 +722,7 @@ def main() -> int:
                 args.task,
                 args.project_root,
                 value,
+                args.changed_path,
             )
         )
         _print_payload(result, args.json, args.task)

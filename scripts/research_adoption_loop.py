@@ -122,7 +122,7 @@ RESEARCH_ADOPTION_DEFINITION = LoopDefinition(
     iteration_transitions=frozenset(),
     budget_terminal="blocked",
 )
-ACTIVE_RESEARCH_ADOPTION_FILENAME = ".active-run"
+ACTIVE_RUN_FILENAME = ".active-run"
 REQUEST_FILENAME = "research-request.json"
 STATE_FILENAME = "research-adoption-state.json"
 ASSESSMENT_FILENAME = "requirements-assessment.json"
@@ -134,7 +134,7 @@ RESEARCH_ADOPTION_RUN = ManagedLoopDefinition(
     loop=RESEARCH_ADOPTION_DEFINITION,
     input_filename=REQUEST_FILENAME,
     state_filename=STATE_FILENAME,
-    active_pointer_filename=ACTIVE_RESEARCH_ADOPTION_FILENAME,
+    active_pointer_filename=ACTIVE_RUN_FILENAME,
     input_hash_field="request_sha256",
     initial_status="frame",
     interrupt_terminals=frozenset({"needs-clarification", "blocked"}),
@@ -999,6 +999,7 @@ def build_subloop_result(
     artifact: Any,
     *,
     source_snapshot_after_sha256: str,
+    changed_paths: list[str] | tuple[str, ...] = (),
 ) -> Mapping[str, Any]:
     if (
         not isinstance(invocation, dict)
@@ -1072,7 +1073,7 @@ def build_subloop_result(
         "status": status,
         "summary": summary,
         "finding_refs": finding_refs,
-        "changed_paths": [],
+        "changed_paths": list(changed_paths),
         "evidence_refs": evidence_refs,
         "budget_usage": {"iterations_used": 1},
         "completion_receipt": completion_receipt,
@@ -1085,6 +1086,7 @@ def prepare_subloop_result(
     task_dir: Path,
     project_root: Path,
     artifact: Any,
+    changed_paths: list[str] | tuple[str, ...] = (),
 ) -> LoopResult:
     task = Path(task_dir)
     invocation, errors = _read_json_artifact(
@@ -1101,6 +1103,7 @@ def prepare_subloop_result(
             invocation,
             artifact,
             source_snapshot_after_sha256=fingerprint,
+            changed_paths=changed_paths,
         )
     except ValueError as exc:
         return LoopResult(False, (str(exc),), {})
@@ -1261,6 +1264,7 @@ def main() -> int:
     subloop = subparsers.add_parser("prepare-subloop-result")
     subloop.add_argument("task", type=Path)
     subloop.add_argument("--artifact", required=True, type=Path)
+    subloop.add_argument("--changed-path", action="append", default=[])
     subloop.add_argument("--project-root", required=True, type=Path)
     subloop.add_argument("--json", action="store_true")
 
@@ -1277,6 +1281,7 @@ def main() -> int:
                 args.task,
                 args.project_root,
                 artifact,
+                args.changed_path,
             )
         )
         _print_payload(result, args.json, args.task)
