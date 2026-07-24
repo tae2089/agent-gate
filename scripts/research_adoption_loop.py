@@ -805,7 +805,7 @@ def _build_evolution_candidate(
 ) -> Mapping[str, Any]:
     summary = brief["evolution_candidate"]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "kind": summary["kind"],
         "source": "manual",
         "source_ref": request["source_ref"],
@@ -814,6 +814,13 @@ def _build_evolution_candidate(
         "evidence": summary["evidence"],
         "labels": summary["labels"],
         "request": request["request"],
+        "requirements": request["requirements"],
+        "scope": ["."],
+        "permissions": [
+            "read-repository",
+            "modify-worktree",
+            "run-local-verification",
+        ],
     }
 
 

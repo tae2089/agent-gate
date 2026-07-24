@@ -510,6 +510,18 @@ def _source_fingerprint(root: Path) -> tuple[str | None, tuple[str, ...]]:
     return digest.hexdigest(), ()
 
 
+def source_fingerprint(
+    project_root: Path | str,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Return the current source fingerprint used by Completion receipts."""
+
+    try:
+        root = Path(project_root).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return None, ("project root is unavailable",)
+    return _source_fingerprint(root)
+
+
 def _kill_runner(process: subprocess.Popen[Any]) -> None:
     if os.name == "posix":
         try:

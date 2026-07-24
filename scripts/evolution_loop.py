@@ -8,6 +8,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
 
@@ -21,10 +22,16 @@ from loop_engine import (
     resolve_active_run,
     transition as transition_state,
 )
-from scenario_gate import validate_completion
+from scenario_gate import source_fingerprint, validate_completion
+from subloop_contract import (
+    PackProfile,
+    SUBLOOP_PERMISSIONS,
+    validate_invocation,
+    validate_result,
+)
 
-CANDIDATE_SCHEMA_VERSION = 1
-STATE_SCHEMA_VERSION = 1
+CANDIDATE_SCHEMA_VERSION = 2
+STATE_SCHEMA_VERSION = 2
 CANDIDATE_REQUIRED_FIELDS = frozenset(
     {
         "schema_version",
@@ -36,12 +43,13 @@ CANDIDATE_REQUIRED_FIELDS = frozenset(
         "evidence",
         "labels",
         "request",
+        "requirements",
+        "scope",
+        "permissions",
     }
 )
 CANDIDATE_ALLOWED_FIELDS = CANDIDATE_REQUIRED_FIELDS
-WORK_KINDS = frozenset(
-    {"feature", "bug", "contract-violation", "technical-debt"}
-)
+WORK_KINDS = frozenset({"feature", "bug", "contract-violation", "technical-debt"})
 STATE_FIELDS = frozenset(
     {
         "schema_version",
@@ -50,6 +58,10 @@ STATE_FIELDS = frozenset(
         "max_iterations",
         "candidate_sha256",
         "pr_url",
+        "run_id",
+        "subloop_iterations_remaining",
+        "active_subloop",
+        "last_subloop_result_sha256",
     }
 )
 PHASE_TRANSITIONS = {
@@ -104,7 +116,35 @@ EVALUATION_VERDICTS = frozenset(
     {"pr-ready", "iterate", "needs-clarification", "blocked"}
 )
 EVALUATION_CHECK_FIELDS = frozenset({"passed", "evidence"})
-ACTIVE_EVOLUTION_FILENAME = ".active-evolution"
+ACTIVE_RUN_FILENAME = ".active-run"
+ACTIVE_SUBLOOP_FIELDS = frozenset(
+    {"invocation_id", "pack", "invocation_sha256", "path"}
+)
+SUBLOOP_REQUEST_FIELDS = frozenset(
+    {
+        "pack",
+        "objective",
+        "requirements",
+        "scope",
+        "permissions",
+        "budget",
+    }
+)
+MAIN_PERMISSIONS = SUBLOOP_PERMISSIONS | frozenset(
+    {"push", "publish", "merge", "deploy"}
+)
+MAIN_SUBLOOP_PROFILES = {
+    name: PackProfile(
+        name=name,
+        supported_modes=frozenset({"standalone", "subloop"}),
+    )
+    for name in (
+        "assurance-loop",
+        "debug-loop",
+        "research-adoption-loop",
+        "ci-repair-loop",
+    )
+}
 
 
 @dataclass(frozen=True)
@@ -114,23 +154,47 @@ class CandidateValidation:
     candidate: Mapping[str, Any]
 
 
-def _non_empty_string(
-    value: Any, label: str, errors: list[str]
-) -> Optional[str]:
+def _non_empty_string(value: Any, label: str, errors: list[str]) -> Optional[str]:
     if not isinstance(value, str) or not value.strip():
         errors.append(f"{label} must be a non-empty string")
         return None
     return value
 
 
-def _string_list(value: Any, label: str, errors: list[str]) -> list[str]:
-    if not isinstance(value, list):
-        errors.append(f"{label} must be a list")
+def _string_list(
+    value: Any,
+    label: str,
+    errors: list[str],
+    *,
+    allow_empty: bool = False,
+) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        qualifier = "a list" if allow_empty else "a non-empty list"
+        errors.append(f"{label} must be {qualifier}")
         return []
     if any(not isinstance(item, str) or not item.strip() for item in value):
         errors.append(f"{label} contains an invalid string")
         return []
+    if len(value) != len(set(value)):
+        errors.append(f"{label} must not contain duplicates")
     return list(value)
+
+
+def _relative_path(value: Any, label: str, errors: list[str]) -> None:
+    if not isinstance(value, str) or not value.strip() or "\\" in value:
+        errors.append(f"{label} must be a relative POSIX path")
+        return
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or value.startswith("./"):
+        errors.append(f"{label} must be a relative POSIX path")
+
+
+def _valid_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def validate_candidate(value: Any) -> CandidateValidation:
@@ -147,17 +211,39 @@ def validate_candidate(value: Any) -> CandidateValidation:
 
     schema_version = value.get("schema_version")
     if schema_version != CANDIDATE_SCHEMA_VERSION:
-        errors.append(
-            f"candidate schema_version must be {CANDIDATE_SCHEMA_VERSION}"
-        )
+        errors.append(f"candidate schema_version must be {CANDIDATE_SCHEMA_VERSION}")
     kind = _non_empty_string(value.get("kind"), "candidate kind", errors)
     source = _non_empty_string(value.get("source"), "candidate source", errors)
     _non_empty_string(value.get("source_ref"), "candidate source_ref", errors)
     _non_empty_string(value.get("title"), "candidate title", errors)
     _non_empty_string(value.get("problem"), "candidate problem", errors)
     evidence = _string_list(value.get("evidence"), "candidate evidence", errors)
-    _string_list(value.get("labels"), "candidate labels", errors)
+    _string_list(
+        value.get("labels"),
+        "candidate labels",
+        errors,
+        allow_empty=True,
+    )
     _non_empty_string(value.get("request"), "user request", errors)
+    _string_list(
+        value.get("requirements"),
+        "candidate requirements",
+        errors,
+    )
+    scope = _string_list(value.get("scope"), "candidate scope", errors)
+    for index, item in enumerate(scope):
+        _relative_path(item, f"candidate scope[{index}]", errors)
+    permissions = _string_list(
+        value.get("permissions"),
+        "candidate permissions",
+        errors,
+    )
+    unsupported_permissions = sorted(set(permissions) - MAIN_PERMISSIONS)
+    if unsupported_permissions:
+        errors.append(
+            "candidate has unsupported permissions: "
+            + ", ".join(unsupported_permissions)
+        )
 
     if kind is not None and kind not in WORK_KINDS:
         errors.append(f"unsupported candidate kind: {kind}")
@@ -167,9 +253,7 @@ def validate_candidate(value: Any) -> CandidateValidation:
         errors.append("candidate evidence must be non-empty")
 
     normalized = {
-        field: value[field]
-        for field in CANDIDATE_ALLOWED_FIELDS
-        if field in value
+        field: value[field] for field in CANDIDATE_ALLOWED_FIELDS if field in value
     }
     return CandidateValidation(not errors, tuple(dict.fromkeys(errors)), normalized)
 
@@ -202,11 +286,7 @@ def _load_state(task_dir: Path) -> RunResult:
         errors.append(f"unsupported evolution status: {status}")
     iteration = value.get("iteration")
     max_iterations = value.get("max_iterations")
-    if (
-        isinstance(iteration, bool)
-        or not isinstance(iteration, int)
-        or iteration < 1
-    ):
+    if isinstance(iteration, bool) or not isinstance(iteration, int) or iteration < 1:
         errors.append("evolution state iteration must be a positive integer")
     if (
         isinstance(max_iterations, bool)
@@ -223,11 +303,7 @@ def _load_state(task_dir: Path) -> RunResult:
     ):
         errors.append("evolution state iteration exceeds max_iterations")
     candidate_hash = value.get("candidate_sha256")
-    if (
-        not isinstance(candidate_hash, str)
-        or len(candidate_hash) != 64
-        or any(character not in "0123456789abcdef" for character in candidate_hash)
-    ):
+    if not _valid_sha256(candidate_hash):
         errors.append("evolution state candidate_sha256 must be a lowercase SHA-256")
     pr_url = value.get("pr_url")
     if status == "pr-opened":
@@ -235,9 +311,73 @@ def _load_state(task_dir: Path) -> RunResult:
             errors.append("pr-opened evolution state requires pr_url")
     elif pr_url is not None:
         errors.append("only pr-opened evolution state may contain pr_url")
+    run_id = value.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        errors.append("evolution state run_id must be a non-empty string")
+    remaining = value.get("subloop_iterations_remaining")
+    if (
+        isinstance(remaining, bool)
+        or not isinstance(remaining, int)
+        or not 0 <= remaining <= 10
+    ):
+        errors.append(
+            "evolution state subloop_iterations_remaining must be from 0 through 10"
+        )
+    active_subloop = value.get("active_subloop")
+    if active_subloop is not None:
+        if not isinstance(active_subloop, dict):
+            errors.append("evolution state active_subloop must be an object or null")
+        else:
+            unknown = sorted(active_subloop.keys() - ACTIVE_SUBLOOP_FIELDS)
+            missing = sorted(ACTIVE_SUBLOOP_FIELDS - active_subloop.keys())
+            if unknown:
+                errors.append(
+                    "evolution state active_subloop has unknown fields: "
+                    + ", ".join(unknown)
+                )
+            if missing:
+                errors.append(
+                    "evolution state active_subloop is missing fields: "
+                    + ", ".join(missing)
+                )
+            for field in ("invocation_id", "pack", "path"):
+                if not isinstance(
+                    active_subloop.get(field), str
+                ) or not active_subloop.get(field):
+                    errors.append(f"evolution state active_subloop {field} is invalid")
+            if not _valid_sha256(active_subloop.get("invocation_sha256")):
+                errors.append(
+                    "evolution state active_subloop invocation_sha256 is invalid"
+                )
+    last_result = value.get("last_subloop_result_sha256")
+    if last_result is not None and not _valid_sha256(last_result):
+        errors.append(
+            "evolution state last_subloop_result_sha256 must be null or a lowercase SHA-256"
+        )
+    candidate_path = task_dir / "candidate.json"
+    if candidate_path.is_symlink():
+        errors.append("candidate must not be a symlink")
+    else:
+        try:
+            candidate_content = candidate_path.read_bytes()
+            candidate_value = json.loads(candidate_content.decode("utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            errors.append(f"cannot read candidate: {exc}")
+        else:
+            candidate_validation = validate_candidate(candidate_value)
+            errors.extend(candidate_validation.errors)
+            if (
+                _valid_sha256(candidate_hash)
+                and content_sha256(candidate_content) != candidate_hash
+            ):
+                errors.append("evolution candidate hash is stale")
     if errors:
         return RunResult(False, tuple(errors), value)
     return RunResult(True, (), value)
+
+
+def load_run(task_dir: Path) -> RunResult:
+    return _load_state(Path(task_dir))
 
 
 def _active_evolution_task(
@@ -245,8 +385,8 @@ def _active_evolution_task(
 ) -> tuple[Optional[Path], tuple[str, ...]]:
     return resolve_active_run(
         Path(project_root),
-        ACTIVE_EVOLUTION_FILENAME,
-        "evolution",
+        ACTIVE_RUN_FILENAME,
+        "root",
     )
 
 
@@ -254,6 +394,7 @@ def start_run(
     task_dir: Path,
     candidate: Any,
     max_iterations: int = 3,
+    subloop_iterations: int = 3,
 ) -> RunResult:
     validation = validate_candidate(candidate)
     if not validation.allowed:
@@ -267,6 +408,16 @@ def start_run(
         return RunResult(
             False, ("max_iterations must be an integer from 1 through 10",), {}
         )
+    if (
+        isinstance(subloop_iterations, bool)
+        or not isinstance(subloop_iterations, int)
+        or not 0 <= subloop_iterations <= 10
+    ):
+        return RunResult(
+            False,
+            ("subloop_iterations must be an integer from 0 through 10",),
+            {},
+        )
     task = Path(task_dir)
     if not task.is_dir() or task.is_symlink():
         return RunResult(False, ("task directory must be a real directory",), {})
@@ -276,7 +427,7 @@ def start_run(
     if state_path.exists() or state_path.is_symlink():
         return RunResult(False, ("evolution state already exists",), {})
     root = task.parent.parent.resolve(strict=True)
-    pointer = task.parent / ACTIVE_EVOLUTION_FILENAME
+    pointer = task.parent / ACTIVE_RUN_FILENAME
     if pointer.exists() or pointer.is_symlink():
         active_task, active_errors = _active_evolution_task(root)
         if active_task is None:
@@ -295,6 +446,10 @@ def start_run(
         "max_iterations": max_iterations,
         "candidate_sha256": content_sha256(candidate_content),
         "pr_url": None,
+        "run_id": task.name,
+        "subloop_iterations_remaining": subloop_iterations,
+        "active_subloop": None,
+        "last_subloop_result_sha256": None,
     }
     try:
         _atomic_write(task / "candidate.json", candidate_content)
@@ -310,6 +465,12 @@ def transition_run(task_dir: Path, next_phase: str) -> RunResult:
     loaded = _load_state(Path(task_dir))
     if not loaded.allowed:
         return loaded
+    if loaded.state["active_subloop"] is not None:
+        return RunResult(
+            False,
+            ("an active Subloop must return before Main can transition",),
+            loaded.state,
+        )
     decision = transition_state(EVOLUTION_DEFINITION, loaded.state, next_phase)
     if not decision.allowed:
         return decision
@@ -317,7 +478,9 @@ def transition_run(task_dir: Path, next_phase: str) -> RunResult:
     try:
         _write_state(Path(task_dir), state)
     except OSError as exc:
-        return RunResult(False, (f"cannot persist evolution state: {exc}",), loaded.state)
+        return RunResult(
+            False, (f"cannot persist evolution state: {exc}",), loaded.state
+        )
     return RunResult(True, (), state)
 
 
@@ -326,6 +489,12 @@ def terminate_run(task_dir: Path, status: str) -> RunResult:
     if not loaded.allowed:
         return loaded
     state = dict(loaded.state)
+    if state["active_subloop"] is not None:
+        return RunResult(
+            False,
+            ("an active Subloop must return before Main can terminate",),
+            state,
+        )
     if state["status"] not in PHASE_TRANSITIONS:
         return RunResult(False, ("evolution run is already terminal",), state)
     if status not in TERMINAL_STATUSES - {"pr-ready", "pr-opened"}:
@@ -334,7 +503,328 @@ def terminate_run(task_dir: Path, status: str) -> RunResult:
     try:
         _write_state(Path(task_dir), state)
     except OSError as exc:
-        return RunResult(False, (f"cannot persist evolution state: {exc}",), loaded.state)
+        return RunResult(
+            False, (f"cannot persist evolution state: {exc}",), loaded.state
+        )
+    return RunResult(True, (), state)
+
+
+def _subloop_request(
+    value: Any,
+) -> tuple[Mapping[str, Any], tuple[str, ...]]:
+    if not isinstance(value, dict):
+        return {}, ("Subloop request must be an object",)
+    errors: list[str] = []
+    unknown = sorted(value.keys() - SUBLOOP_REQUEST_FIELDS)
+    missing = sorted(SUBLOOP_REQUEST_FIELDS - value.keys())
+    if unknown:
+        errors.append(f"Subloop request has unknown fields: {', '.join(unknown)}")
+    if missing:
+        errors.append(f"Subloop request is missing fields: {', '.join(missing)}")
+    _non_empty_string(value.get("pack"), "Subloop request pack", errors)
+    _non_empty_string(
+        value.get("objective"),
+        "Subloop request objective",
+        errors,
+    )
+    _string_list(
+        value.get("requirements"),
+        "Subloop request requirements",
+        errors,
+    )
+    scope = _string_list(value.get("scope"), "Subloop request scope", errors)
+    for index, item in enumerate(scope):
+        _relative_path(item, f"Subloop request scope[{index}]", errors)
+    permissions = _string_list(
+        value.get("permissions"),
+        "Subloop request permissions",
+        errors,
+        allow_empty=True,
+    )
+    unsupported = sorted(set(permissions) - SUBLOOP_PERMISSIONS)
+    if unsupported:
+        errors.append(
+            "Subloop request has unsupported permissions: " + ", ".join(unsupported)
+        )
+    budget = value.get("budget")
+    if not isinstance(budget, dict):
+        errors.append("Subloop request budget must be an object")
+    else:
+        if set(budget) != {"iteration_limit"}:
+            errors.append("Subloop request budget must contain iteration_limit")
+        limit = budget.get("iteration_limit")
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 10
+        ):
+            errors.append("Subloop request iteration_limit must be from 1 through 10")
+    normalized = {
+        field: value[field] for field in SUBLOOP_REQUEST_FIELDS if field in value
+    }
+    return normalized, tuple(dict.fromkeys(errors))
+
+
+def _read_candidate(task: Path) -> CandidateValidation:
+    value, errors = _read_json_artifact(task / "candidate.json", "candidate")
+    if errors:
+        return CandidateValidation(False, errors, {})
+    return validate_candidate(value)
+
+
+def _next_subloop_id(task: Path) -> str:
+    parent = task / "subloops"
+    index = 1
+    while (parent / f"subloop-{index:03d}").exists():
+        index += 1
+    return f"subloop-{index:03d}"
+
+
+def _persist_once_or_match(
+    path: Path,
+    content: bytes,
+    label: str,
+) -> tuple[str, ...]:
+    if path.is_symlink():
+        return (f"{label} must not be a symlink",)
+    try:
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        try:
+            _atomic_write(path, content)
+        except OSError as exc:
+            return (f"cannot persist {label}: {exc}",)
+        return ()
+    except OSError as exc:
+        return (f"cannot read {label}: {exc}",)
+    if existing != content:
+        return (f"{label} already exists with different content",)
+    return ()
+
+
+def invoke_subloop(
+    task_dir: Path,
+    project_root: Path,
+    request: Any,
+    profile: PackProfile,
+) -> RunResult:
+    task = Path(task_dir)
+    loaded = _load_state(task)
+    if not loaded.allowed:
+        return loaded
+    if loaded.state["status"] in TERMINAL_STATUSES:
+        return RunResult(
+            False, ("terminal Main run cannot invoke a Subloop",), loaded.state
+        )
+    if loaded.state["active_subloop"] is not None:
+        return RunResult(False, ("another Subloop is already active",), loaded.state)
+
+    normalized_request, request_errors = _subloop_request(request)
+    if request_errors:
+        return RunResult(False, request_errors, loaded.state)
+    if normalized_request.get("pack") != profile.name:
+        return RunResult(
+            False,
+            ("Subloop request pack does not match the selected Pack",),
+            loaded.state,
+        )
+    candidate_validation = _read_candidate(task)
+    if not candidate_validation.allowed:
+        return RunResult(
+            False,
+            candidate_validation.errors,
+            loaded.state,
+        )
+
+    try:
+        root = Path(project_root).resolve(strict=True)
+        relative_task = task.resolve(strict=True).relative_to(root)
+    except (OSError, ValueError) as exc:
+        return RunResult(
+            False,
+            (f"cannot resolve Main task: {exc}",),
+            loaded.state,
+        )
+    fingerprint, fingerprint_errors = source_fingerprint(root)
+    if fingerprint is None:
+        return RunResult(False, fingerprint_errors, loaded.state)
+
+    invocation_id = _next_subloop_id(task)
+    child_relative = PurePosixPath("subloops") / invocation_id
+    state_sha256 = content_sha256(_canonical_json(loaded.state))
+    candidate_value = candidate_validation.candidate
+    parent_context = {
+        "run_id": loaded.state["run_id"],
+        "task_ref": relative_task.as_posix(),
+        "state_sha256": state_sha256,
+        "scope": candidate_value["scope"],
+        "permissions": [
+            permission
+            for permission in candidate_value["permissions"]
+            if permission in SUBLOOP_PERMISSIONS
+        ],
+        "remaining_iterations": loaded.state["subloop_iterations_remaining"],
+        "source_snapshot_sha256": fingerprint,
+    }
+    invocation = {
+        "schema_version": 1,
+        "invocation_id": invocation_id,
+        "pack": normalized_request["pack"],
+        "mode": "subloop",
+        "parent": {
+            "run_id": loaded.state["run_id"],
+            "task_ref": relative_task.as_posix(),
+            "state_sha256": state_sha256,
+        },
+        "objective": normalized_request["objective"],
+        "requirements": normalized_request["requirements"],
+        "scope": normalized_request["scope"],
+        "source_snapshot": {
+            "ref": (child_relative / "source-snapshot.json").as_posix(),
+            "sha256": fingerprint,
+        },
+        "permissions": normalized_request["permissions"],
+        "budget": normalized_request["budget"],
+        "completion_task_ref": relative_task.as_posix(),
+    }
+    validation = validate_invocation(invocation, profile, parent_context)
+    if not validation.allowed:
+        return RunResult(False, validation.errors, loaded.state)
+    assert validation.sha256 is not None
+
+    subloops = task / "subloops"
+    child = subloops / invocation_id
+    if subloops.is_symlink() or child.is_symlink():
+        return RunResult(
+            False,
+            ("Subloop storage must not contain symlinks",),
+            loaded.state,
+        )
+    created: list[Path] = []
+    state = dict(loaded.state)
+    state["active_subloop"] = {
+        "invocation_id": invocation_id,
+        "pack": profile.name,
+        "invocation_sha256": validation.sha256,
+        "path": child_relative.as_posix(),
+    }
+    try:
+        child.mkdir(parents=True, exist_ok=False)
+        created.append(child)
+        snapshot_path = child / "source-snapshot.json"
+        _atomic_write(
+            snapshot_path,
+            _canonical_json(
+                {
+                    "schema_version": 1,
+                    "source_fingerprint": fingerprint,
+                }
+            ),
+        )
+        created.append(snapshot_path)
+        invocation_path = child / "invocation.json"
+        _atomic_write(invocation_path, _canonical_json(validation.value))
+        created.append(invocation_path)
+        _write_state(task, state)
+    except OSError as exc:
+        for path in reversed(created):
+            try:
+                if path.is_dir():
+                    path.rmdir()
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        try:
+            subloops.rmdir()
+        except OSError:
+            pass
+        return RunResult(
+            False,
+            (f"cannot invoke Subloop: {exc}",),
+            loaded.state,
+        )
+    return RunResult(True, (), state)
+
+
+def accept_subloop_result(
+    task_dir: Path,
+    project_root: Path,
+    result: Any,
+) -> RunResult:
+    task = Path(task_dir)
+    loaded = _load_state(task)
+    if not loaded.allowed:
+        return loaded
+    raw_result_hash = (
+        content_sha256(_canonical_json(result)) if isinstance(result, dict) else None
+    )
+    active = loaded.state["active_subloop"]
+    if active is None:
+        if (
+            raw_result_hash is not None
+            and raw_result_hash == loaded.state["last_subloop_result_sha256"]
+        ):
+            return RunResult(True, (), loaded.state)
+        return RunResult(False, ("no active Subloop result is expected",), loaded.state)
+
+    relative = PurePosixPath(active["path"])
+    if (
+        len(relative.parts) != 2
+        or relative.parts[0] != "subloops"
+        or relative.parts[1] != active["invocation_id"]
+    ):
+        return RunResult(
+            False,
+            ("active Subloop path is malformed",),
+            loaded.state,
+        )
+    child = task / Path(*relative.parts)
+    invocation_value, invocation_errors = _read_json_artifact(
+        child / "invocation.json",
+        "Subloop invocation",
+    )
+    if invocation_errors:
+        return RunResult(False, invocation_errors, loaded.state)
+    if content_sha256(_canonical_json(invocation_value)) != active["invocation_sha256"]:
+        return RunResult(
+            False,
+            ("active Subloop invocation hash is stale",),
+            loaded.state,
+        )
+    fingerprint, fingerprint_errors = source_fingerprint(project_root)
+    if fingerprint is None:
+        return RunResult(False, fingerprint_errors, loaded.state)
+    validation = validate_result(
+        result,
+        invocation_value,
+        current_source_snapshot_sha256=fingerprint,
+    )
+    if not validation.allowed:
+        return RunResult(False, validation.errors, loaded.state)
+    assert validation.sha256 is not None
+    content = _canonical_json(validation.value)
+    persist_errors = _persist_once_or_match(
+        child / "result.json",
+        content,
+        "Subloop result",
+    )
+    if persist_errors:
+        return RunResult(False, persist_errors, loaded.state)
+
+    iterations_used = validation.value["budget_usage"]["iterations_used"]
+    state = dict(loaded.state)
+    state["subloop_iterations_remaining"] -= iterations_used
+    state["active_subloop"] = None
+    state["last_subloop_result_sha256"] = validation.sha256
+    try:
+        _write_state(task, state)
+    except OSError as exc:
+        return RunResult(
+            False,
+            (f"cannot accept Subloop result: {exc}",),
+            loaded.state,
+        )
     return RunResult(True, (), state)
 
 
@@ -353,9 +843,7 @@ def _validate_evaluation(
     if missing:
         errors.append(f"evaluation is missing fields: {', '.join(missing)}")
     if value.get("schema_version") != EVALUATION_SCHEMA_VERSION:
-        errors.append(
-            f"evaluation schema_version must be {EVALUATION_SCHEMA_VERSION}"
-        )
+        errors.append(f"evaluation schema_version must be {EVALUATION_SCHEMA_VERSION}")
     verdict = value.get("verdict")
     if verdict not in EVALUATION_VERDICTS:
         errors.append(f"unsupported evaluation verdict: {verdict}")
@@ -372,13 +860,9 @@ def _validate_evaluation(
         unknown_checks = sorted(checks.keys() - EVALUATION_CHECK_NAMES)
         missing_checks = sorted(EVALUATION_CHECK_NAMES - checks.keys())
         if unknown_checks:
-            errors.append(
-                f"evaluation has unknown checks: {', '.join(unknown_checks)}"
-            )
+            errors.append(f"evaluation has unknown checks: {', '.join(unknown_checks)}")
         if missing_checks:
-            errors.append(
-                f"evaluation is missing checks: {', '.join(missing_checks)}"
-            )
+            errors.append(f"evaluation is missing checks: {', '.join(missing_checks)}")
         for name in sorted(EVALUATION_CHECK_NAMES & checks.keys()):
             check = checks[name]
             if not isinstance(check, dict):
@@ -398,8 +882,7 @@ def _validate_evaluation(
                 not isinstance(evidence, list)
                 or not evidence
                 or any(
-                    not isinstance(item, str) or not item.strip()
-                    for item in evidence
+                    not isinstance(item, str) or not item.strip() for item in evidence
                 )
             ):
                 errors.append(
@@ -433,13 +916,17 @@ def _validate_evaluation(
     return normalized, tuple(dict.fromkeys(errors))
 
 
-def evaluate_run(
-    task_dir: Path, project_root: Path, evaluation: Any
-) -> RunResult:
+def evaluate_run(task_dir: Path, project_root: Path, evaluation: Any) -> RunResult:
     task = Path(task_dir)
     loaded = _load_state(task)
     if not loaded.allowed:
         return loaded
+    if loaded.state["active_subloop"] is not None:
+        return RunResult(
+            False,
+            ("an active Subloop must return before Main evaluation",),
+            loaded.state,
+        )
     if loaded.state["status"] != "evaluate":
         return RunResult(
             False,
@@ -451,8 +938,7 @@ def evaluate_run(
     if not completion.allowed:
         return RunResult(
             False,
-            ("scenario completion is not current and complete",)
-            + completion.errors,
+            ("scenario completion is not current and complete",) + completion.errors,
             loaded.state,
         )
     scenario_result_path = task / "scenario-result.json"
@@ -463,26 +949,18 @@ def evaluate_run(
     try:
         scenario_result_content = scenario_result_path.read_bytes()
     except OSError as exc:
-        return RunResult(
-            False, (f"cannot read scenario result: {exc}",), loaded.state
-        )
+        return RunResult(False, (f"cannot read scenario result: {exc}",), loaded.state)
     result_hash = content_sha256(scenario_result_content)
-    normalized, errors = _validate_evaluation(
-        evaluation, loaded.state, result_hash
-    )
+    normalized, errors = _validate_evaluation(evaluation, loaded.state, result_hash)
     if errors:
         return RunResult(False, errors, loaded.state)
 
     iteration = loaded.state["iteration"]
-    evaluation_path = (
-        task / "iterations" / f"{iteration:03d}" / "evaluation.json"
-    )
+    evaluation_path = task / "iterations" / f"{iteration:03d}" / "evaluation.json"
     try:
         _atomic_write(evaluation_path, _canonical_json(normalized))
     except OSError as exc:
-        return RunResult(
-            False, (f"cannot persist evaluation: {exc}",), loaded.state
-        )
+        return RunResult(False, (f"cannot persist evaluation: {exc}",), loaded.state)
 
     verdict = normalized["verdict"]
     if verdict == "pr-ready":
@@ -510,13 +988,17 @@ def _recorded_pr_url(value: Any) -> Optional[str]:
     return value
 
 
-def record_pr(
-    task_dir: Path, project_root: Path, pr_url: Any
-) -> RunResult:
+def record_pr(task_dir: Path, project_root: Path, pr_url: Any) -> RunResult:
     task = Path(task_dir)
     loaded = _load_state(task)
     if not loaded.allowed:
         return loaded
+    if loaded.state["active_subloop"] is not None:
+        return RunResult(
+            False,
+            ("an active Subloop must return before Main records a PR",),
+            loaded.state,
+        )
 
     recorded_url = _recorded_pr_url(pr_url)
     if recorded_url is None:
@@ -532,16 +1014,13 @@ def record_pr(
             loaded.state,
         )
     if loaded.state["status"] != "pr-ready":
-        return RunResult(
-            False, ("evolution run is not pr-ready",), loaded.state
-        )
+        return RunResult(False, ("evolution run is not pr-ready",), loaded.state)
 
     completion = validate_completion(task, Path(project_root))
     if not completion.allowed:
         return RunResult(
             False,
-            ("scenario completion is not current and complete",)
-            + completion.errors,
+            ("scenario completion is not current and complete",) + completion.errors,
             loaded.state,
         )
     state = dict(loaded.state)
@@ -605,6 +1084,7 @@ def main() -> int:
     start.add_argument("--candidate", required=True, type=Path)
     start.add_argument("--project-root", required=True, type=Path)
     start.add_argument("--max-iterations", type=int, default=3)
+    start.add_argument("--subloop-iterations", type=int, default=3)
     start.add_argument("--json", action="store_true")
 
     transition = subparsers.add_parser("transition")
@@ -623,7 +1103,9 @@ def main() -> int:
 
     terminate = subparsers.add_parser("terminate")
     terminate.add_argument("task", type=Path)
-    terminate.add_argument("status", choices=sorted(TERMINAL_STATUSES - {"pr-ready", "pr-opened"}))
+    terminate.add_argument(
+        "status", choices=sorted(TERMINAL_STATUSES - {"pr-ready", "pr-opened"})
+    )
     terminate.add_argument("--project-root", required=True, type=Path)
     terminate.add_argument("--json", action="store_true")
 
@@ -631,6 +1113,18 @@ def main() -> int:
     status.add_argument("task", type=Path, nargs="?")
     status.add_argument("--project-root", required=True, type=Path)
     status.add_argument("--json", action="store_true")
+
+    invoke = subparsers.add_parser("invoke-subloop")
+    invoke.add_argument("task", type=Path)
+    invoke.add_argument("--request", required=True, type=Path)
+    invoke.add_argument("--project-root", required=True, type=Path)
+    invoke.add_argument("--json", action="store_true")
+
+    accept = subparsers.add_parser("accept-subloop")
+    accept.add_argument("task", type=Path)
+    accept.add_argument("--result", required=True, type=Path)
+    accept.add_argument("--project-root", required=True, type=Path)
+    accept.add_argument("--json", action="store_true")
 
     record_pr_parser = subparsers.add_parser("record-pr")
     record_pr_parser.add_argument("task", type=Path)
@@ -664,13 +1158,12 @@ def main() -> int:
                 task,
                 candidate_value,
                 args.max_iterations,
+                args.subloop_iterations,
             )
     elif args.operation == "transition":
         result = transition_run(task, args.next_phase)
     elif args.operation == "evaluate":
-        evaluation_value, errors = _read_json_artifact(
-            args.evaluation, "evaluation"
-        )
+        evaluation_value, errors = _read_json_artifact(args.evaluation, "evaluation")
         result = (
             RunResult(False, errors, {})
             if errors
@@ -680,6 +1173,45 @@ def main() -> int:
         result = terminate_run(task, args.status)
     elif args.operation == "record-pr":
         result = record_pr(task, args.project_root, args.url)
+    elif args.operation == "invoke-subloop":
+        request_value, errors = _read_json_artifact(
+            args.request,
+            "Subloop request",
+        )
+        profile = (
+            MAIN_SUBLOOP_PROFILES.get(request_value.get("pack"))
+            if isinstance(request_value, dict)
+            else None
+        )
+        if errors:
+            result = RunResult(False, errors, {})
+        elif profile is None:
+            result = RunResult(
+                False,
+                ("Evolution Main does not support the requested Subloop Pack",),
+                {},
+            )
+        else:
+            result = invoke_subloop(
+                task,
+                args.project_root,
+                request_value,
+                profile,
+            )
+    elif args.operation == "accept-subloop":
+        result_value, errors = _read_json_artifact(
+            args.result,
+            "Subloop result",
+        )
+        result = (
+            RunResult(False, errors, {})
+            if errors
+            else accept_subloop_result(
+                task,
+                args.project_root,
+                result_value,
+            )
+        )
     else:
         result = _load_state(task)
 
