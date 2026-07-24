@@ -22,6 +22,7 @@ from loop_engine import (
     resolve_active_run,
     transition as transition_state,
 )
+from loop_runtime import release_root_pointer
 from scenario_gate import source_fingerprint, validate_completion
 from subloop_contract import (
     PackProfile,
@@ -481,6 +482,14 @@ def transition_run(task_dir: Path, next_phase: str) -> RunResult:
         return RunResult(
             False, (f"cannot persist evolution state: {exc}",), loaded.state
         )
+    if state["status"] in TERMINAL_STATUSES - {"pr-ready"}:
+        release_errors = release_root_pointer(
+            Path(task_dir),
+            ACTIVE_RUN_FILENAME,
+            "evolution",
+        )
+        if release_errors:
+            return RunResult(False, release_errors, state)
     return RunResult(True, (), state)
 
 
@@ -506,6 +515,13 @@ def terminate_run(task_dir: Path, status: str) -> RunResult:
         return RunResult(
             False, (f"cannot persist evolution state: {exc}",), loaded.state
         )
+    release_errors = release_root_pointer(
+        Path(task_dir),
+        ACTIVE_RUN_FILENAME,
+        "evolution",
+    )
+    if release_errors:
+        return RunResult(False, release_errors, state)
     return RunResult(True, (), state)
 
 
@@ -1034,6 +1050,13 @@ def record_pr(task_dir: Path, project_root: Path, pr_url: Any) -> RunResult:
             (f"cannot persist pull request receipt: {exc}",),
             loaded.state,
         )
+    release_errors = release_root_pointer(
+        task,
+        ACTIVE_RUN_FILENAME,
+        "evolution",
+    )
+    if release_errors:
+        return RunResult(False, release_errors, state)
     return RunResult(True, (), state)
 
 

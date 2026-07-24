@@ -359,7 +359,7 @@ class AssuranceSubloopTest(unittest.TestCase):
             "budget": {"iteration_limit": 1},
             "completion_task_ref": "_workspace/evolution-example",
         }
-        source_after = "c" * 64
+        source_after = "b" * 64
 
         result = assurance_loop.build_subloop_result(
             invocation,

@@ -53,6 +53,15 @@ SUBLOOP_RUN = ManagedLoopDefinition(
     initial_status="inspect",
     interrupt_terminals=frozenset({"blocked", "needs-clarification"}),
 )
+OTHER_ROOT_RUN = ManagedLoopDefinition(
+    loop=LOOP,
+    input_filename="other-request.json",
+    state_filename="other-state.json",
+    active_pointer_filename=".active-sample",
+    input_hash_field="request_sha256",
+    initial_status="inspect",
+    interrupt_terminals=frozenset({"blocked", "needs-clarification"}),
+)
 
 
 class ManagedLoopRuntimeTest(unittest.TestCase):
@@ -96,6 +105,18 @@ class ManagedLoopRuntimeTest(unittest.TestCase):
         self.assertTrue(terminate_managed_run(RUN, self.task, "blocked").allowed)
         restarted = start_managed_run(RUN, other, self.request)
         self.assertTrue(restarted.allowed, restarted.errors)
+
+    def test_shared_root_pointer_serializes_different_pack_definitions(self):
+        self.assertTrue(start_managed_run(RUN, self.task, self.request).allowed)
+        other = self.workspace / "other-pack"
+        other.mkdir()
+
+        blocked = start_managed_run(OTHER_ROOT_RUN, other, self.request)
+        self.assertFalse(blocked.allowed)
+
+        self.assertTrue(terminate_managed_run(RUN, self.task, "blocked").allowed)
+        started = start_managed_run(OTHER_ROOT_RUN, other, self.request)
+        self.assertTrue(started.allowed, started.errors)
 
     def test_transition_persists_retry_and_budget_terminal(self):
         self.assertTrue(
@@ -181,9 +202,19 @@ class ManagedLoopRuntimeTest(unittest.TestCase):
 
         terminated = terminate_managed_run(RUN, self.task, "needs-clarification")
         self.assertTrue(terminated.allowed, terminated.errors)
+        self.assertFalse((self.workspace / ".active-sample").exists())
         repeated = terminate_managed_run(RUN, self.task, "blocked")
         self.assertFalse(repeated.allowed)
         self.assertIn("sample run is already terminal", repeated.errors)
+
+    def test_normal_terminal_transition_releases_the_root_pointer(self):
+        self.assertTrue(start_managed_run(RUN, self.task, self.request).allowed)
+        self.assertTrue(transition_managed_run(RUN, self.task, "verify").allowed)
+
+        completed = transition_managed_run(RUN, self.task, "complete")
+
+        self.assertTrue(completed.allowed, completed.errors)
+        self.assertFalse((self.workspace / ".active-sample").exists())
 
     def test_attach_nested_subloop_uses_existing_input_without_global_pointer(self):
         child = self.workspace / "main" / "subloops" / "subloop-001"

@@ -187,7 +187,7 @@ class DebugLoopTest(unittest.TestCase):
             "budget": {"iteration_limit": 1},
             "completion_task_ref": "_workspace/evolution",
         }
-        source_after = "c" * 64
+        source_after = "b" * 64
         result = debug_loop.build_subloop_result(
             invocation,
             diagnosis("d" * 64, resolution="diagnosed"),

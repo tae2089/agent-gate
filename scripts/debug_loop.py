@@ -28,7 +28,7 @@ from loop_runtime import (
     transition_managed_run,
 )
 from scenario_gate import source_fingerprint, validate_completion
-from subloop_contract import PackProfile, SUBLOOP_PERMISSIONS
+from subloop_contract import PackProfile, SUBLOOP_PERMISSIONS, validate_result
 
 REQUEST_SCHEMA_VERSION = 1
 DIAGNOSIS_SCHEMA_VERSION = 1
@@ -448,6 +448,8 @@ def build_subloop_result(
     diagnosis: Any,
     *,
     source_snapshot_after_sha256: str,
+    changed_paths: list[str] | tuple[str, ...] = (),
+    scenario_result_sha256: str | None = None,
 ) -> Mapping[str, Any]:
     if (
         not isinstance(invocation, dict)
@@ -472,6 +474,14 @@ def build_subloop_result(
     else:
         status = "blocked"
         decision = None
+    completion_receipt = (
+        {
+            "task_ref": invocation["completion_task_ref"],
+            "scenario_result_sha256": scenario_result_sha256,
+        }
+        if scenario_result_sha256 is not None
+        else None
+    )
     return {
         "schema_version": 1,
         "invocation_id": invocation["invocation_id"],
@@ -480,10 +490,10 @@ def build_subloop_result(
         "status": status,
         "summary": value["root_cause"],
         "finding_refs": ["diagnosis.json"],
-        "changed_paths": [],
+        "changed_paths": list(changed_paths),
         "evidence_refs": ["diagnosis.json"],
         "budget_usage": {"iterations_used": 1},
-        "completion_receipt": None,
+        "completion_receipt": completion_receipt,
         "decision": decision,
         "source_snapshot_after_sha256": source_snapshot_after_sha256,
     }
@@ -493,6 +503,8 @@ def prepare_subloop_result(
     task_dir: Path,
     project_root: Path,
     diagnosis: Any,
+    changed_paths: list[str] | tuple[str, ...] = (),
+    scenario_result_sha256: str | None = None,
 ) -> LoopResult:
     task = Path(task_dir)
     invocation, errors = _read_json(
@@ -509,12 +521,56 @@ def prepare_subloop_result(
             invocation,
             diagnosis,
             source_snapshot_after_sha256=fingerprint,
+            changed_paths=changed_paths,
+            scenario_result_sha256=scenario_result_sha256,
         )
-        atomic_write(task / "diagnosis.json", canonical_json(diagnosis))
-        atomic_write(task / "result-input.json", canonical_json(result))
-    except (OSError, ValueError) as exc:
+    except ValueError as exc:
         return LoopResult(False, (f"cannot prepare Debug Subloop result: {exc}",), {})
-    return LoopResult(True, (), result)
+    validation = validate_result(
+        result,
+        invocation,
+        current_source_snapshot_sha256=fingerprint,
+    )
+    if not validation.allowed:
+        return LoopResult(False, validation.errors, {})
+    for path, content, label in (
+        (
+            task / "diagnosis.json",
+            canonical_json(diagnosis),
+            "Debug Subloop diagnosis",
+        ),
+        (
+            task / "result-input.json",
+            canonical_json(validation.value),
+            "Debug Subloop result",
+        ),
+    ):
+        errors = _persist_once_or_match(path, content, label)
+        if errors:
+            return LoopResult(False, errors, {})
+    return LoopResult(True, (), validation.value)
+
+
+def _persist_once_or_match(
+    path: Path,
+    content: bytes,
+    label: str,
+) -> tuple[str, ...]:
+    if path.is_symlink():
+        return (f"{label} must not be a symlink",)
+    try:
+        existing = path.read_bytes()
+    except FileNotFoundError:
+        try:
+            atomic_write(path, content)
+        except OSError as exc:
+            return (f"cannot persist {label}: {exc}",)
+        return ()
+    except OSError as exc:
+        return (f"cannot read {label}: {exc}",)
+    if existing != content:
+        return (f"{label} already exists with different content",)
+    return ()
 
 
 def _print_payload(
@@ -589,6 +645,8 @@ def main() -> int:
     prepare = subparsers.add_parser("prepare-subloop-result")
     prepare.add_argument("task", type=Path)
     prepare.add_argument("--diagnosis", required=True, type=Path)
+    prepare.add_argument("--changed-path", action="append", default=[])
+    prepare.add_argument("--scenario-result-sha256")
     prepare.add_argument("--project-root", required=True, type=Path)
     prepare.add_argument("--json", action="store_true")
 
@@ -634,7 +692,13 @@ def main() -> int:
         result = (
             LoopResult(False, errors, {})
             if errors
-            else prepare_subloop_result(task, args.project_root, value)
+            else prepare_subloop_result(
+                task,
+                args.project_root,
+                value,
+                args.changed_path,
+                args.scenario_result_sha256,
+            )
         )
     else:
         result = load_run(task)

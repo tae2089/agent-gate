@@ -57,6 +57,38 @@ def _write_state(
     )
 
 
+def release_root_pointer(
+    task_dir: Path,
+    active_pointer_filename: str | None,
+    loop_name: str,
+) -> tuple[str, ...]:
+    if active_pointer_filename is None:
+        return ()
+    task = Path(task_dir)
+    pointer = task.parent / active_pointer_filename
+    if pointer.is_symlink():
+        return (f"{loop_name} active pointer must not be a symlink",)
+    try:
+        content = pointer.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ()
+    except (OSError, UnicodeError) as exc:
+        return (f"cannot read {loop_name} active pointer: {exc}",)
+    try:
+        expected = task.resolve(strict=True).relative_to(
+            task.parent.parent.resolve(strict=True)
+        )
+    except (OSError, RuntimeError, ValueError) as exc:
+        return (f"cannot resolve {loop_name} task for release: {exc}",)
+    if content != expected.as_posix() + "\n":
+        return (f"{loop_name} active pointer names another task",)
+    try:
+        pointer.unlink()
+    except OSError as exc:
+        return (f"cannot release {loop_name} active pointer: {exc}",)
+    return ()
+
+
 def _valid_sha256(value: Any) -> bool:
     return (
         isinstance(value, str)
@@ -341,6 +373,14 @@ def transition_managed_run(
             (f"cannot persist {definition.loop.name} state: {exc}",),
             loaded.state,
         )
+    if decision.state["status"] in definition.loop.terminal_statuses:
+        release_errors = release_root_pointer(
+            task,
+            definition.active_pointer_filename,
+            definition.loop.name,
+        )
+        if release_errors:
+            return LoopResult(False, release_errors, decision.state)
     return decision
 
 
@@ -375,4 +415,11 @@ def terminate_managed_run(
             (f"cannot persist {definition.loop.name} state: {exc}",),
             loaded.state,
         )
+    release_errors = release_root_pointer(
+        task,
+        definition.active_pointer_filename,
+        definition.loop.name,
+    )
+    if release_errors:
+        return LoopResult(False, release_errors, state)
     return LoopResult(True, (), state)
