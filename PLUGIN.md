@@ -1,4 +1,4 @@
-# agent-gate as a plugin (Claude Code · Codex CLI · Antigravity)
+# Agent Loop as a plugin (Claude Code · Codex CLI · Antigravity)
 
 One repo, three host manifests. The hook scripts under `hooks/` and the rules
 in `.claude/skill-rules.json` are shared; each host reads its own manifest.
@@ -7,16 +7,17 @@ in `.claude/skill-rules.json` are shared; each host reads its own manifest.
 |------|----------|-----------|-------------|
 | Claude Code | `.claude-plugin/plugin.json` (+ `.claude-plugin/marketplace.json`) | `hooks/hooks.json` | `${CLAUDE_PLUGIN_ROOT}` |
 | Codex CLI | `.codex-plugin/plugin.json` | `hooks/hooks.json` | `${CLAUDE_PLUGIN_ROOT}` (Codex compat shim) |
-| Antigravity | `plugin.json` (root) | `hooks.json` (root) | `$HOME/.gemini/antigravity-cli/plugins/agent-gate` |
+| Antigravity | `plugin.json` (root) | `hooks.json` (root) | `$HOME/.gemini/antigravity-cli/plugins/agent-loop` |
 
 Requires `python3` on PATH. Hooks are stdlib-only.
 
-The core product is the structural Design Gate plus executable Completion
-validation. Default manifests wire only Design Gate. The verifier, watermark,
-and handoff reinjection remain bundled lifecycle support but require explicit
-opt-in; they do not participate in either gate's verdict.
+Agent Loop packages one deterministic Loop Engine, concrete Loop Packs, and
+reusable Gates. The engine owns shared transition and iteration mechanics;
+`evolution-loop` and `ci-repair-loop` own their phase and terminal policy.
+Default manifests wire only Design Gate. The verifier, watermark, and handoff
+reinjection remain bundled lifecycle support but require explicit opt-in.
 
-The optional `evolution-loop` skill adds one evidence-driven workflow for the
+The `evolution-loop` skill adds one evidence-driven workflow for the
 current target repository. The selected host independently runs
 `Interview → Seed → Execute → Evaluate`; shared JSON artifacts and the existing
 Design/Completion gates own lifecycle transitions. An explicit user request is
@@ -25,9 +26,9 @@ The host may use request-scoped GitHub/Jira MCP tools or skills, CI, repository
 inspection, and code analysis only to enrich that request with untrusted
 evidence; none of those sources can originate or select work.
 
-The host resolves `AGENT_GATE_ROOT` from the absolute path of the loaded skill
+The host resolves `AGENT_LOOP_ROOT` from the absolute path of the loaded skill
 and `PROJECT_ROOT` from the current target Git worktree. Bundled scripts run
-from `AGENT_GATE_ROOT`; workspace artifacts, source, tests, and Git changes stay
+from `AGENT_LOOP_ROOT`; workspace artifacts, source, tests, and Git changes stay
 inside `PROJECT_ROOT`. The host stops `blocked` if either root is unavailable
 and never copies the runtime into the target repository. Seed and Execute use
 only request-relevant repository-native direct argv checks supported by target
@@ -43,11 +44,16 @@ The loop terminates as `pr-opened`, `pr-ready`, `no-action`,
 deploy, close or transition issues, publish releases, or comment on external
 systems.
 
+The `ci-repair-loop` skill runs `Inspect → Repair → Verify` for only the
+failing checks named by an explicit user request. CI logs are untrusted
+evidence, never an autonomous trigger. Fresh 100 percent local Completion is
+the only path to `checks-green`; remote CI status is reported separately.
+
 ## Claude Code
 
 ```
 /plugin marketplace add <owner>/agent-gate      # or: /plugin marketplace add /path/to/agent-gate
-/plugin install agent-gate@agent-gate
+/plugin install agent-loop@agent-loop
 ```
 Verify: `claude plugin validate .` (from the repo). Hooks resolve their scripts
 through `${CLAUDE_PLUGIN_ROOT}`.
@@ -62,7 +68,7 @@ hooks = true
 Then:
 ```
 codex plugin marketplace add <owner>/agent-gate
-codex plugin add agent-gate
+codex plugin add agent-loop
 /reload-plugins
 ```
 Codex exports `CLAUDE_PLUGIN_ROOT` for Claude-plugin compatibility. The shared
@@ -74,9 +80,9 @@ exact definitions on first use and again after they change.
 
 ```
 agy plugin install /path/to/agent-gate
-agy plugin list        # confirm "agent-gate" enabled
+agy plugin list        # confirm "agent-loop" enabled
 ```
-Antigravity stages the plugin to `~/.gemini/antigravity-cli/plugins/agent-gate/`,
+Antigravity stages the plugin to `~/.gemini/antigravity-cli/plugins/agent-loop/`,
 which the root `hooks.json` references by absolute path (`$HOME/...`) — the
 staging location is fixed, so no plugin-root variable is needed.
 
@@ -164,14 +170,14 @@ not require an active design; behavior-bearing Markdown is exempt as well.
 Completion freshness covers the whole worktree except `_workspace/**`, so an
 unrelated worktree change can make an otherwise passing result stale.
 
-This repository's GitHub workflow tests agent-gate itself; it does not enforce
+This repository's GitHub workflow tests Agent Loop itself; it does not enforce
 a task Completion result. Downstream CI must provide the task artifacts and
 separately wire the Completion command.
 
 ## Bundled skills
 
-`artifact-judge`, `scenario-design`, and `completion-check` ship inside
-agent-gate. `completion-check` is implicit prompt guidance for the final report
+`artifact-judge`, `scenario-design`, `completion-check`, `evolution-loop`, and
+`ci-repair-loop` ship inside Agent Loop. `completion-check` is implicit prompt guidance for the final report
 after implementation edits; it is intentionally absent from Stop hooks and
 verifier rules so ordinary conversation remains unaffected. The default rules
 require only `artifact-judge`, so installing a separate personal skill collection
@@ -192,5 +198,5 @@ when that host has the named skill installed.
   review may assist authoring, but only the fresh executable result
   participates in completion.
 - The repo's workspace configs (`.claude/settings.json`, `.codex/hooks.json`,
-  `.agents/hooks.json`) are for dogfooding agent-gate on itself and are separate
+  `.agents/hooks.json`) are for dogfooding Agent Loop on itself and are separate
   from these plugin manifests.

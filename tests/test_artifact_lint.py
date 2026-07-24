@@ -12,7 +12,7 @@ LINT = Path(__file__).resolve().parent.parent / "scripts" / "artifact_lint.py"
 GOOD_HANDOFF = """# handoff
 
 ## 목표
-agent-gate에 artifact-lint 추가
+Agent Loop에 artifact-lint 추가
 
 ## 완료 작업
 - scripts/artifact_lint.py 구현

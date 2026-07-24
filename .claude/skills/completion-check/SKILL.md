@@ -1,6 +1,6 @@
 ---
 name: completion-check
-description: Verify an active agent-gate task before reporting implementation work complete after changing project files. Use immediately before the final completion report for implementation, fixes, or refactors that made project edits. Do not use for general conversation, explanation, status-only, planning-only, review-only, or turns with no project edits.
+description: Verify an active Agent Loop task before reporting implementation work complete after changing project files. Use immediately before the final completion report for implementation, fixes, or refactors that made project edits. Do not use for general conversation, explanation, status-only, planning-only, review-only, or turns with no project edits.
 ---
 
 # Completion Check

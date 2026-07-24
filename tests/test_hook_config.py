@@ -90,7 +90,7 @@ class TestHookConfig(unittest.TestCase):
 
         for relative in ("hooks.json", ".agents/hooks.json"):
             with self.subTest(relative=relative):
-                config = self.load(relative)["agent-gate"]
+                config = self.load(relative)["agent-loop"]
                 self.assertEqual(set(config), {"PreToolUse"})
                 self.assertEqual(
                     set(config["PreToolUse"][0]["matcher"].split("|")),
@@ -141,12 +141,12 @@ class TestHookConfig(unittest.TestCase):
         hooks_path = ROOT / "hooks.json"
         self.assertTrue(hooks_path.is_file(), "Antigravity plugins require root hooks.json")
         config = self.load("hooks.json")
-        self.assertIn("agent-gate", config)
+        self.assertIn("agent-loop", config)
 
     def test_antigravity_hooks_cover_every_file_mutator(self):
         for relative in ("hooks.json", ".agents/hooks.json"):
             with self.subTest(relative=relative):
-                hooks = self.load(relative)["agent-gate"]
+                hooks = self.load(relative)["agent-loop"]
                 matcher = hooks["PreToolUse"][0]["matcher"]
                 self.assertEqual(set(matcher.split("|")), ANTIGRAVITY_MUTATORS)
                 self.assertNotIn("PostToolUse", hooks)

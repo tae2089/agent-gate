@@ -70,7 +70,7 @@ def _run_hook(hook_input: dict, max_age_hours: float) -> int:
     if len(content) > MAX_CHARS:
         content = content[:MAX_CHARS] + "\n... [truncated — read the file for the rest]"
     print(
-        f"[agent-gate] Context was just compacted. The pre-compaction handoff below is the "
+        f"[agent-loop] Context was just compacted. The pre-compaction handoff below is the "
         f"authoritative record of in-progress work — trust it over the compaction summary, "
         f"especially user corrections and value judgments. Source: {handoff}\n\n{content}"
     )

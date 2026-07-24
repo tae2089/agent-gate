@@ -92,7 +92,7 @@ def _pretool_block(reason: str) -> int:
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "deny",
-                    "permissionDecisionReason": f"[agent-gate] {reason}",
+                    "permissionDecisionReason": f"[agent-loop] {reason}",
                 }
             }
         )

@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""Deterministic contracts for the agent-gate evolutionary loop."""
+"""Deterministic contracts for the Agent Loop evolution pack."""
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import urlparse
 
+from loop_engine import (
+    LoopDefinition,
+    LoopResult as RunResult,
+    atomic_write as _atomic_write,
+    canonical_json as _canonical_json,
+    content_sha256,
+    direct_workspace_task as _direct_task,
+    resolve_active_run,
+    transition as transition_state,
+)
 from scenario_gate import validate_completion
 
 CANDIDATE_SCHEMA_VERSION = 1
@@ -62,6 +69,18 @@ TERMINAL_STATUSES = frozenset(
         "pr-opened",
     }
 )
+EVOLUTION_DEFINITION = LoopDefinition(
+    name="evolution",
+    transitions=PHASE_TRANSITIONS,
+    terminal_statuses=TERMINAL_STATUSES,
+    iteration_transitions=frozenset(
+        {
+            ("execute", "interview"),
+            ("evaluate", "interview"),
+        }
+    ),
+    budget_terminal="budget-exhausted",
+)
 EVALUATION_SCHEMA_VERSION = 1
 EVALUATION_FIELDS = frozenset(
     {
@@ -93,13 +112,6 @@ class CandidateValidation:
     allowed: bool
     errors: tuple[str, ...]
     candidate: Mapping[str, Any]
-
-
-@dataclass(frozen=True)
-class RunResult:
-    allowed: bool
-    errors: tuple[str, ...]
-    state: Mapping[str, Any]
 
 
 def _non_empty_string(
@@ -160,35 +172,6 @@ def validate_candidate(value: Any) -> CandidateValidation:
         if field in value
     }
     return CandidateValidation(not errors, tuple(dict.fromkeys(errors)), normalized)
-
-
-def _canonical_json(value: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        + "\n"
-    ).encode("utf-8")
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    temporary_path = Path(temporary)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary_path.replace(path)
-    except BaseException:
-        temporary_path.unlink(missing_ok=True)
-        raise
 
 
 def _write_state(task_dir: Path, state: Mapping[str, Any]) -> None:
@@ -260,22 +243,11 @@ def _load_state(task_dir: Path) -> RunResult:
 def _active_evolution_task(
     project_root: Path,
 ) -> tuple[Optional[Path], tuple[str, ...]]:
-    root = Path(project_root).resolve(strict=True)
-    pointer = root / "_workspace" / ACTIVE_EVOLUTION_FILENAME
-    if pointer.is_symlink():
-        return None, ("active evolution pointer must not be a symlink",)
-    try:
-        raw = pointer.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return None, ("no active evolution run",)
-    except (OSError, UnicodeError) as exc:
-        return None, (f"cannot read active evolution pointer: {exc}",)
-    if not raw.endswith("\n") or not raw.strip() or "\n" in raw.rstrip("\n"):
-        return None, ("active evolution pointer is malformed",)
-    task, errors = _direct_task(Path(raw.strip()), root)
-    if task is None:
-        return None, errors
-    return task, ()
+    return resolve_active_run(
+        Path(project_root),
+        ACTIVE_EVOLUTION_FILENAME,
+        "evolution",
+    )
 
 
 def start_run(
@@ -321,7 +293,7 @@ def start_run(
         "status": "seed",
         "iteration": 1,
         "max_iterations": max_iterations,
-        "candidate_sha256": hashlib.sha256(candidate_content).hexdigest(),
+        "candidate_sha256": content_sha256(candidate_content),
         "pr_url": None,
     }
     try:
@@ -338,25 +310,10 @@ def transition_run(task_dir: Path, next_phase: str) -> RunResult:
     loaded = _load_state(Path(task_dir))
     if not loaded.allowed:
         return loaded
-    state = dict(loaded.state)
-    status = state["status"]
-    if status not in PHASE_TRANSITIONS:
-        return RunResult(False, ("terminal evolution state cannot transition",), state)
-    if next_phase not in PHASE_TRANSITIONS[status]:
-        return RunResult(
-            False,
-            (f"evolution transition {status} -> {next_phase} is not allowed",),
-            state,
-        )
-
-    if next_phase == "interview":
-        if state["iteration"] >= state["max_iterations"]:
-            state["status"] = "budget-exhausted"
-        else:
-            state["status"] = "interview"
-            state["iteration"] += 1
-    else:
-        state["status"] = next_phase
+    decision = transition_state(EVOLUTION_DEFINITION, loaded.state, next_phase)
+    if not decision.allowed:
+        return decision
+    state = dict(decision.state)
     try:
         _write_state(Path(task_dir), state)
     except OSError as exc:
@@ -509,7 +466,7 @@ def evaluate_run(
         return RunResult(
             False, (f"cannot read scenario result: {exc}",), loaded.state
         )
-    result_hash = hashlib.sha256(scenario_result_content).hexdigest()
+    result_hash = content_sha256(scenario_result_content)
     normalized, errors = _validate_evaluation(
         evaluation, loaded.state, result_hash
     )
@@ -599,23 +556,6 @@ def record_pr(
             loaded.state,
         )
     return RunResult(True, (), state)
-
-
-def _direct_task(
-    raw_task: Path, project_root: Path
-) -> tuple[Optional[Path], tuple[str, ...]]:
-    try:
-        root = project_root.resolve(strict=True)
-        candidate = raw_task if raw_task.is_absolute() else root / raw_task
-        if candidate.is_symlink() or candidate.parent.is_symlink():
-            return None, ("task must be a direct _workspace task",)
-        task = candidate.resolve(strict=True)
-        relative = task.relative_to(root)
-    except (OSError, ValueError):
-        return None, ("task must be a direct _workspace task",)
-    if len(relative.parts) != 2 or relative.parts[0] != "_workspace":
-        return None, ("task must be a direct _workspace task",)
-    return task, ()
 
 
 def _read_json_artifact(path: Path, label: str) -> tuple[Any, tuple[str, ...]]:

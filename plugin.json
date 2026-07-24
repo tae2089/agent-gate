@@ -1,4 +1,4 @@
 {
-  "name": "agent-gate",
-  "description": "Structural design and executable completion gates with an optional evidence-driven evolutionary loop. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
+  "name": "agent-loop",
+  "description": "Deterministic loop engineering with evolution and CI repair packs plus structural gates. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
 }

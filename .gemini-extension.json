@@ -1,5 +1,5 @@
 {
-  "name": "agent-gate",
-  "version": "0.2.0",
-  "description": "Structural design and executable completion gates with an optional evidence-driven evolutionary loop. (Antigravity extension manifest.)"
+  "name": "agent-loop",
+  "version": "0.3.0",
+  "description": "Deterministic loop engineering with evolution and CI repair packs plus structural gates. (Antigravity extension manifest.)"
 }
