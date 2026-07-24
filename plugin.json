@@ -1,4 +1,4 @@
 {
   "name": "agent-loop",
-  "description": "Deterministic loop engineering with evolution and CI repair packs plus structural gates. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
+  "description": "Deterministic loop engineering with evolution, CI repair, review, and research adoption packs. (Antigravity plugin manifest; Claude uses .claude-plugin/, Codex uses .codex-plugin/.)"
 }

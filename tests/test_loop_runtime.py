@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -65,9 +66,7 @@ class ManagedLoopRuntimeTest(unittest.TestCase):
         self.assertEqual(result.state["max_iterations"], 2)
         self.assertEqual(len(result.state["request_sha256"]), 64)
         self.assertEqual(
-            json.loads(
-                (self.task / "sample-request.json").read_text(encoding="utf-8")
-            ),
+            json.loads((self.task / "sample-request.json").read_text(encoding="utf-8")),
             self.request,
         )
         self.assertEqual(
@@ -92,16 +91,12 @@ class ManagedLoopRuntimeTest(unittest.TestCase):
         self.assertTrue(
             start_managed_run(RUN, self.task, self.request, max_iterations=2).allowed
         )
-        self.assertTrue(
-            transition_managed_run(RUN, self.task, "verify").allowed
-        )
+        self.assertTrue(transition_managed_run(RUN, self.task, "verify").allowed)
         retry = transition_managed_run(RUN, self.task, "inspect")
 
         self.assertTrue(retry.allowed, retry.errors)
         self.assertEqual(retry.state["iteration"], 2)
-        self.assertTrue(
-            transition_managed_run(RUN, self.task, "verify").allowed
-        )
+        self.assertTrue(transition_managed_run(RUN, self.task, "verify").allowed)
         exhausted = transition_managed_run(RUN, self.task, "inspect")
 
         self.assertTrue(exhausted.allowed, exhausted.errors)
@@ -125,6 +120,39 @@ class ManagedLoopRuntimeTest(unittest.TestCase):
             loaded.errors,
         )
 
+    def test_load_rejects_tampered_canonical_input(self):
+        self.assertTrue(start_managed_run(RUN, self.task, self.request).allowed)
+        request_path = self.task / "sample-request.json"
+        request_path.write_text(
+            json.dumps({"schema_version": 1, "request": "Changed."}),
+            encoding="utf-8",
+        )
+
+        loaded = load_managed_run(RUN, self.task)
+
+        self.assertFalse(loaded.allowed)
+        self.assertIn("sample input hash is stale", loaded.errors)
+
+    def test_start_rolls_back_files_when_pointer_write_fails(self):
+        pointer = self.workspace / ".active-sample"
+
+        from loop_runtime import atomic_write as real_atomic_write
+
+        def fail_pointer(path, content):
+            if Path(path).name == ".active-sample":
+                raise OSError("pointer unavailable")
+            real_atomic_write(path, content)
+
+        with patch("loop_runtime.atomic_write", side_effect=fail_pointer):
+            failed = start_managed_run(RUN, self.task, self.request)
+
+        self.assertFalse(failed.allowed)
+        self.assertFalse((self.task / "sample-request.json").exists())
+        self.assertFalse((self.task / "sample-state.json").exists())
+        self.assertFalse(pointer.exists())
+        retried = start_managed_run(RUN, self.task, self.request)
+        self.assertTrue(retried.allowed, retried.errors)
+
     def test_resolve_and_terminate_fail_closed(self):
         missing_task, missing_errors = resolve_managed_run(RUN, self.project)
         self.assertIsNone(missing_task)
@@ -137,7 +165,9 @@ class ManagedLoopRuntimeTest(unittest.TestCase):
 
         unsupported = terminate_managed_run(RUN, self.task, "complete")
         self.assertFalse(unsupported.allowed)
-        self.assertIn("unsupported sample terminal status: complete", unsupported.errors)
+        self.assertIn(
+            "unsupported sample terminal status: complete", unsupported.errors
+        )
 
         terminated = terminate_managed_run(RUN, self.task, "needs-clarification")
         self.assertTrue(terminated.allowed, terminated.errors)

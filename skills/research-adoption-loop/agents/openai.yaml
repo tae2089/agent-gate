@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Adoption Loop"
+  short_description: "Evaluate research through a verified local prototype"
+  default_prompt: "Use $research-adoption-loop to research and evaluate adopting this technique in the current repository."

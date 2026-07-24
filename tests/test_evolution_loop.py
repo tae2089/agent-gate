@@ -934,7 +934,7 @@ class SkillPackagingTest(unittest.TestCase):
         ):
             with self.subTest(path=relative):
                 manifest = json.loads((ROOT / relative).read_text(encoding="utf-8"))
-                self.assertEqual(manifest["version"], "0.3.0")
+                self.assertEqual(manifest["version"], "0.4.0")
 
     def test_user_docs_define_evidence_terminals_and_no_merge_boundary(self):
         content = (

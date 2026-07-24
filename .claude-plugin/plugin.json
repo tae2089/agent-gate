@@ -1,10 +1,10 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "agent-loop",
-  "description": "Deterministic loop engineering with evolution and CI repair packs, structural gates, and lifecycle support.",
-  "version": "0.3.0",
+  "description": "Deterministic loop engineering with evolution, CI repair, review, and research adoption packs.",
+  "version": "0.4.0",
   "author": { "name": "tae2089" },
   "license": "MIT",
-  "keywords": ["hooks", "enforcement", "skills", "guardrails", "loops", "evolution", "ci-repair"],
+  "keywords": ["hooks", "enforcement", "skills", "guardrails", "loops", "evolution", "ci-repair", "review", "research"],
   "skills": "./.claude/skills/"
 }

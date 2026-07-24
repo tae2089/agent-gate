@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -154,6 +155,22 @@ class CompletionGateTest(unittest.TestCase):
         self.assertFalse(current.allowed)
         self.assertIn("scenario result source_fingerprint is stale", current.errors)
 
+    def test_untracked_content_change_is_stale_even_with_same_size_and_mtime(self):
+        untracked = self.project / "src" / "draft.txt"
+        untracked.write_text("alpha\n", encoding="utf-8")
+        original = untracked.stat()
+        self.assertTrue(run_scenarios(self.task, self.project).result_written)
+
+        untracked.write_text("bravo\n", encoding="utf-8")
+        os.utime(
+            untracked,
+            ns=(original.st_atime_ns, original.st_mtime_ns),
+        )
+        result = validate_current_result(self.task, self.project)
+
+        self.assertFalse(result.allowed)
+        self.assertIn("scenario result source_fingerprint is stale", result.errors)
+
     def test_design_change_makes_previous_result_stale(self):
         cases = (
             ("task.md", "scenario result task_sha256 is stale"),
@@ -209,9 +226,7 @@ class CompletionGateTest(unittest.TestCase):
                 self.assertIn(reason, stored["results"][0]["reason"])
 
     def test_cli_finish_uses_and_clears_the_active_task(self):
-        self.assertTrue(
-            scenario_gate.activate_design(self.task, self.project).allowed
-        )
+        self.assertTrue(scenario_gate.activate_design(self.task, self.project).allowed)
         pointer = self.project / "_workspace" / ".active-task"
         run = subprocess.run(
             [
@@ -246,9 +261,7 @@ class CompletionGateTest(unittest.TestCase):
         self.assertFalse(pointer.exists())
 
     def test_finish_keeps_active_task_when_result_is_stale(self):
-        self.assertTrue(
-            scenario_gate.activate_design(self.task, self.project).allowed
-        )
+        self.assertTrue(scenario_gate.activate_design(self.task, self.project).allowed)
         pointer = self.project / "_workspace" / ".active-task"
         self.assertTrue(run_scenarios(self.task, self.project).result_written)
         (self.project / "src" / "app.txt").write_text("changed\n", encoding="utf-8")
