@@ -1,5 +1,5 @@
 ---
-name: review-loop
+name: assurance-loop
 description: Iteratively review and address an explicitly requested code diff, branch, or pull request until no actionable findings remain and repository-native checks have fresh 100% Completion evidence. Use when the user asks for both review and fixes; do not use for a read-only review report, autonomous PR selection, or CI repair.
 ---
 
@@ -30,12 +30,12 @@ lifecycle transitions, retry budget, and the `review-clean` terminal.
 1. Keep the working directory in the target Git worktree.
 2. Resolve `PROJECT_ROOT` as its absolute real root.
 3. Resolve `AGENT_LOOP_ROOT` as the parent of the `skills/` directory
-   containing this loaded skill. Require bundled `scripts/review_loop.py` and
+   containing this loaded skill. Require bundled `scripts/assurance_loop.py` and
    `scripts/scenario_gate.py`; never copy them into the target repository.
 4. Resume first:
 
 ```bash
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" status \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" status \
   --project-root "$PROJECT_ROOT" --json
 ```
 
@@ -68,7 +68,7 @@ that boundary during a run. Create
 Start the run:
 
 ```bash
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" start \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" start \
   _workspace/review-<slug> \
   --request _workspace/review-<slug>/request-input.json \
   --project-root "$PROJECT_ROOT" --max-iterations 3 --json
@@ -113,7 +113,7 @@ Use this exact scenario contract shape:
 python3 "$AGENT_LOOP_ROOT/scripts/scenario_gate.py" design \
   _workspace/review-<slug> \
   --project-root "$PROJECT_ROOT" --activate --json
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" transition \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" transition \
   _workspace/review-<slug> review \
   --project-root "$PROJECT_ROOT" --json
 ```
@@ -165,7 +165,7 @@ empty `findings` list.
 For actionable findings, submit:
 
 ```bash
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" submit \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" submit \
   _workspace/review-<slug> \
   --report _workspace/review-<slug>/review-input.json \
   --project-root "$PROJECT_ROOT" --json
@@ -178,7 +178,7 @@ python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" submit \
 2. Enter Verify and run current scenarios:
 
 ```bash
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" transition \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" transition \
   _workspace/review-<slug> verify \
   --project-root "$PROJECT_ROOT" --json
 python3 "$AGENT_LOOP_ROOT/scripts/scenario_gate.py" run \
@@ -189,7 +189,7 @@ python3 "$AGENT_LOOP_ROOT/scripts/scenario_gate.py" run \
    it passes, return to Review and consume one bounded iteration:
 
 ```bash
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" verify \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" verify \
   _workspace/review-<slug> \
   --project-root "$PROJECT_ROOT" --json
 ```
@@ -206,7 +206,7 @@ terminal:
 ```bash
 python3 "$AGENT_LOOP_ROOT/scripts/scenario_gate.py" completion \
   --project-root "$PROJECT_ROOT" --finish --json
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" submit \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" submit \
   _workspace/review-<slug> \
   --report _workspace/review-<slug>/review-input.json \
   --project-root "$PROJECT_ROOT" --json
@@ -226,7 +226,7 @@ After a run has started, persist an interruption and release only that run's
 active Design pointer:
 
 ```bash
-python3 "$AGENT_LOOP_ROOT/scripts/review_loop.py" terminate \
+python3 "$AGENT_LOOP_ROOT/scripts/assurance_loop.py" terminate \
   _workspace/review-<slug> needs-clarification \
   --project-root "$PROJECT_ROOT" --json
 python3 "$AGENT_LOOP_ROOT/scripts/scenario_gate.py" release \

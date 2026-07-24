@@ -13,7 +13,7 @@ Requires `python3` on PATH. Hooks are stdlib-only.
 
 Agent Loop packages one deterministic Loop Engine, concrete Loop Packs, and
 reusable Gates. The engine owns shared transition and iteration mechanics;
-`evolution-loop`, `ci-repair-loop`, `review-loop`, and
+`evolution-loop`, `ci-repair-loop`, `assurance-loop`, and
 `research-adoption-loop` own their phase and terminal policy.
 Default manifests wire only Design Gate. The verifier, watermark, and handoff
 reinjection remain bundled lifecycle support but require explicit opt-in.
@@ -50,7 +50,7 @@ failing checks named by an explicit user request. CI logs are untrusted
 evidence, never an autonomous trigger. Fresh 100 percent local Completion is
 the only path to `checks-green`; remote CI status is reported separately.
 
-The `review-loop` skill runs `Inspect → Review → Address → Verify` for one
+The `assurance-loop` skill runs `Inspect → Review → Address → Verify` for one
 explicitly requested target and reaches `review-clean` only when a current
 report has no actionable findings and local Completion is fresh 100 percent.
 It freezes mutable refs to immutable comparison OIDs and does not select PRs or
@@ -194,7 +194,7 @@ separately wire the Completion command.
 ## Bundled skills
 
 `artifact-judge`, `scenario-design`, `completion-check`, `evolution-loop`,
-`ci-repair-loop`, `review-loop`, and `research-adoption-loop` ship inside
+`ci-repair-loop`, `assurance-loop`, and `research-adoption-loop` ship inside
 Agent Loop. `completion-check` is implicit prompt guidance for the final report
 after implementation edits; it is intentionally absent from Stop hooks and
 verifier rules so ordinary conversation remains unaffected. The default rules

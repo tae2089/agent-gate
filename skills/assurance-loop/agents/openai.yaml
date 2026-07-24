@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Loop"
+  short_description: "Iteratively review and address actionable findings"
+  default_prompt: "Use $assurance-loop to assess and address the current change until no actionable findings remain."
