@@ -1,4 +1,4 @@
-"""Contract tests for the deterministic review Loop Pack."""
+"""Contract tests for the deterministic assurance Loop Pack."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from gate_helpers import IMPLEMENTATION, TASK, init_git_project  # noqa: E402
 
-import review_loop  # noqa: E402
+import assurance_loop  # noqa: E402
 import scenario_gate  # noqa: E402
 
 
@@ -48,10 +48,10 @@ def finding(**overrides):
 
 class ReviewValidationTest(unittest.TestCase):
     def test_request_requires_manual_authority_and_exact_fields(self):
-        valid = review_loop.validate_request(request())
-        external = review_loop.validate_request(request(source="github"))
-        unknown = review_loop.validate_request(request(provider="github"))
-        empty_scope = review_loop.validate_request(request(scope=[]))
+        valid = assurance_loop.validate_request(request())
+        external = assurance_loop.validate_request(request(source="github"))
+        unknown = assurance_loop.validate_request(request(provider="github"))
+        empty_scope = assurance_loop.validate_request(request(scope=[]))
 
         self.assertTrue(valid.allowed, valid.errors)
         self.assertFalse(external.allowed)
@@ -65,16 +65,16 @@ class ReviewValidationTest(unittest.TestCase):
             "request_sha256": "a" * 64,
             "scenario_result_sha256": "b" * 64,
         }
-        actionable = review_loop.validate_report(
+        actionable = assurance_loop.validate_report(
             {**base, "verdict": "actionable", "findings": [finding()]}
         )
-        clean = review_loop.validate_report(
+        clean = assurance_loop.validate_report(
             {**base, "verdict": "clean", "findings": []}
         )
-        contradictory = review_loop.validate_report(
+        contradictory = assurance_loop.validate_report(
             {**base, "verdict": "clean", "findings": [finding()]}
         )
-        duplicate = review_loop.validate_report(
+        duplicate = assurance_loop.validate_report(
             {
                 **base,
                 "verdict": "actionable",
@@ -128,17 +128,17 @@ class ReviewRunTest(unittest.TestCase):
         self.temp.cleanup()
 
     def start_review(self, max_iterations=2):
-        result = review_loop.start_run(
+        result = assurance_loop.start_run(
             self.task,
             request(),
             max_iterations=max_iterations,
         )
         self.assertTrue(result.allowed, result.errors)
-        self.assertTrue(review_loop.transition_run(self.task, "review").allowed)
+        self.assertTrue(assurance_loop.transition_run(self.task, "review").allowed)
         return result
 
     def report(self, verdict, findings):
-        state = review_loop.load_run(self.task)
+        state = assurance_loop.load_run(self.task)
         content = (self.task / "scenario-result.json").read_bytes()
         return {
             "schema_version": 1,
@@ -158,7 +158,7 @@ class ReviewRunTest(unittest.TestCase):
         self.contract_path.write_text(json.dumps(contract), encoding="utf-8")
 
     def test_start_persists_inspect_state_and_active_pointer(self):
-        result = review_loop.start_run(self.task, request())
+        result = assurance_loop.start_run(self.task, request())
 
         self.assertTrue(result.allowed, result.errors)
         self.assertEqual(result.state["status"], "inspect")
@@ -176,7 +176,7 @@ class ReviewRunTest(unittest.TestCase):
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
 
-        submitted = review_loop.submit_review(
+        submitted = assurance_loop.submit_review(
             self.task,
             self.project,
             self.report("actionable", [finding()]),
@@ -188,12 +188,12 @@ class ReviewRunTest(unittest.TestCase):
 
     def test_clean_report_requires_current_100_percent_completion(self):
         self.start_review()
-        missing = review_loop.submit_review(
+        missing = assurance_loop.submit_review(
             self.task,
             self.project,
             {
                 "schema_version": 1,
-                "request_sha256": review_loop.load_run(self.task).state[
+                "request_sha256": assurance_loop.load_run(self.task).state[
                     "request_sha256"
                 ],
                 "scenario_result_sha256": "a" * 64,
@@ -207,7 +207,7 @@ class ReviewRunTest(unittest.TestCase):
         self.assertTrue(
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
-        clean = review_loop.submit_review(
+        clean = assurance_loop.submit_review(
             self.task,
             self.project,
             self.report("clean", []),
@@ -227,7 +227,7 @@ class ReviewRunTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-        result = review_loop.submit_review(
+        result = assurance_loop.submit_review(
             self.task,
             self.project,
             report,
@@ -243,35 +243,35 @@ class ReviewRunTest(unittest.TestCase):
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
         self.assertTrue(
-            review_loop.submit_review(
+            assurance_loop.submit_review(
                 self.task,
                 self.project,
                 self.report("actionable", [finding()]),
             ).allowed
         )
-        self.assertTrue(review_loop.transition_run(self.task, "verify").allowed)
+        self.assertTrue(assurance_loop.transition_run(self.task, "verify").allowed)
         self.assertTrue(
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
 
-        retry = review_loop.verify_run(self.task, self.project)
+        retry = assurance_loop.verify_run(self.task, self.project)
 
         self.assertTrue(retry.allowed, retry.errors)
         self.assertEqual(retry.state["status"], "review")
         self.assertEqual(retry.state["iteration"], 2)
 
         self.assertTrue(
-            review_loop.submit_review(
+            assurance_loop.submit_review(
                 self.task,
                 self.project,
                 self.report("actionable", [finding(id="R-002")]),
             ).allowed
         )
-        self.assertTrue(review_loop.transition_run(self.task, "verify").allowed)
+        self.assertTrue(assurance_loop.transition_run(self.task, "verify").allowed)
         self.assertTrue(
             scenario_gate.run_scenarios(self.task, self.project).result_written
         )
-        exhausted = review_loop.verify_run(self.task, self.project)
+        exhausted = assurance_loop.verify_run(self.task, self.project)
 
         self.assertTrue(exhausted.allowed, exhausted.errors)
         self.assertEqual(exhausted.state["status"], "budget-exhausted")
@@ -283,7 +283,7 @@ class ReviewRunTest(unittest.TestCase):
         started = subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "scripts" / "review_loop.py"),
+                str(ROOT / "scripts" / "assurance_loop.py"),
                 "start",
                 "_workspace/review",
                 "--request",
@@ -298,7 +298,7 @@ class ReviewRunTest(unittest.TestCase):
         status = subprocess.run(
             [
                 sys.executable,
-                str(ROOT / "scripts" / "review_loop.py"),
+                str(ROOT / "scripts" / "assurance_loop.py"),
                 "status",
                 *common,
             ],

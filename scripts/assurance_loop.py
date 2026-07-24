@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic contracts for the Agent Loop review pack."""
+"""Deterministic contracts for the Agent Loop assurance pack."""
 
 from __future__ import annotations
 

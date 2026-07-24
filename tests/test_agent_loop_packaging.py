@@ -87,7 +87,7 @@ class LoopPackPackagingTest(unittest.TestCase):
         self.assertEqual(codex_entry.resolve(strict=True), canonical.resolve(strict=True))
 
     def test_new_loop_skills_have_one_canonical_cross_host_source(self):
-        for name in ("review-loop", "research-adoption-loop"):
+        for name in ("assurance-loop", "research-adoption-loop"):
             with self.subTest(skill=name):
                 canonical = ROOT / "skills" / name
                 claude_entry = ROOT / ".claude" / "skills" / name
@@ -110,7 +110,7 @@ class LoopPackPackagingTest(unittest.TestCase):
         for relative in (
             "skills/evolution-loop/SKILL.md",
             "skills/ci-repair-loop/SKILL.md",
-            "skills/review-loop/SKILL.md",
+            "skills/assurance-loop/SKILL.md",
             "skills/research-adoption-loop/SKILL.md",
         ):
             with self.subTest(path=relative):
@@ -150,8 +150,8 @@ class LoopPackPackagingTest(unittest.TestCase):
     def test_new_loop_skills_guard_terminal_order_and_external_actions(self):
         cases = (
             (
-                "review-loop",
-                "review_loop.py",
+                "assurance-loop",
+                "assurance_loop.py",
                 "--report",
                 "review-clean",
             ),
@@ -226,7 +226,7 @@ class LoopPackPackagingTest(unittest.TestCase):
         self.assertNotIn('"weight"', schemas)
 
     def test_new_loop_scripts_are_pack_owned_entry_points(self):
-        self.assertTrue((ROOT / "scripts" / "review_loop.py").is_file())
+        self.assertTrue((ROOT / "scripts" / "assurance_loop.py").is_file())
         self.assertTrue(
             (ROOT / "scripts" / "research_adoption_loop.py").is_file()
         )
@@ -244,7 +244,7 @@ class LoopPackPackagingTest(unittest.TestCase):
             "Gate",
             "evolution-loop",
             "ci-repair-loop",
-            "review-loop",
+            "assurance-loop",
             "research-adoption-loop",
         ):
             self.assertIn(required, content)
