@@ -98,17 +98,12 @@ def resolve_active_run(
     return direct_workspace_task(Path(raw.strip()), root)
 
 
-def transition(
-    definition: LoopDefinition,
+def validate_iteration_state(
     current_state: Mapping[str, Any],
-    next_status: str,
-) -> LoopResult:
-    """Return the next immutable run state allowed by ``definition``."""
-
-    state = dict(current_state)
+) -> tuple[str, ...]:
     errors: list[str] = []
-    iteration = state.get("iteration")
-    max_iterations = state.get("max_iterations")
+    iteration = current_state.get("iteration")
+    max_iterations = current_state.get("max_iterations")
     if (
         isinstance(iteration, bool)
         or not isinstance(iteration, int)
@@ -129,8 +124,22 @@ def transition(
         and iteration > max_iterations
     ):
         errors.append("iteration exceeds max_iterations")
+    return tuple(errors)
+
+
+def transition(
+    definition: LoopDefinition,
+    current_state: Mapping[str, Any],
+    next_status: str,
+) -> LoopResult:
+    """Return the next immutable run state allowed by ``definition``."""
+
+    state = dict(current_state)
+    errors = validate_iteration_state(state)
+    iteration = state.get("iteration")
+    max_iterations = state.get("max_iterations")
     if errors:
-        return LoopResult(False, tuple(errors), state)
+        return LoopResult(False, errors, state)
 
     status = state.get("status")
     if status in definition.terminal_statuses:
@@ -151,6 +160,10 @@ def transition(
         )
 
     if (status, next_status) in definition.iteration_transitions:
+        assert isinstance(iteration, int) and not isinstance(iteration, bool)
+        assert isinstance(max_iterations, int) and not isinstance(
+            max_iterations, bool
+        )
         if iteration >= max_iterations:
             state["status"] = definition.budget_terminal
             return LoopResult(True, (), state)
