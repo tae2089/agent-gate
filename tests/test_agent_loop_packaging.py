@@ -158,7 +158,7 @@ class LoopPackPackagingTest(unittest.TestCase):
             (
                 "research-adoption-loop",
                 "research_adoption_loop.py",
-                "--decision",
+                "--brief",
                 "adopted",
             ),
         )
@@ -186,6 +186,44 @@ class LoopPackPackagingTest(unittest.TestCase):
                     ROOT / "skills" / name / "agents" / "openai.yaml"
                 ).read_text(encoding="utf-8")
                 self.assertIn(f"${name}", metadata)
+
+    def test_research_adoption_skill_uses_requirements_gate_without_scores(self):
+        skill = ROOT / "skills" / "research-adoption-loop"
+        content = (skill / "SKILL.md").read_text(encoding="utf-8")
+        schemas = (skill / "references" / "artifact-schemas.md").read_text(
+            encoding="utf-8"
+        )
+        normalized = " ".join((content + schemas).split())
+
+        for required in (
+            "Requirements Gate",
+            "requirements-assessment.json",
+            "adoption-brief.json",
+            "Evidence Grade",
+            "high",
+            "moderate",
+            "low",
+            "very-low",
+            "repository_fit",
+            "prototype_result",
+            "evolution-candidate.json",
+            "first_completion_success",
+        ):
+            self.assertIn(required, normalized)
+        for criterion in (
+            "clarity",
+            "completeness",
+            "consistency",
+            "necessity",
+            "traceability",
+            "feasibility",
+            "verifiability",
+            "atomicity",
+        ):
+            self.assertIn(f'"{criterion}"', schemas)
+        self.assertIn("Do not calculate", content)
+        self.assertNotIn('"total_score"', schemas)
+        self.assertNotIn('"weight"', schemas)
 
     def test_new_loop_scripts_are_pack_owned_entry_points(self):
         self.assertTrue((ROOT / "scripts" / "review_loop.py").is_file())

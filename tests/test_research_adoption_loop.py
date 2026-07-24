@@ -1,4 +1,4 @@
-"""Contract tests for the deterministic research adoption Loop Pack."""
+"""Contract tests for the requirements-gated research adoption Loop Pack."""
 
 from __future__ import annotations
 
@@ -16,42 +16,54 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from gate_helpers import IMPLEMENTATION, TASK, init_git_project  # noqa: E402
 
+import evolution_loop  # noqa: E402
 import research_adoption_loop  # noqa: E402
 import scenario_gate  # noqa: E402
+
+REQUIREMENT_NAMES = (
+    "atomicity",
+    "clarity",
+    "completeness",
+    "consistency",
+    "feasibility",
+    "necessity",
+    "traceability",
+    "verifiability",
+)
 
 
 def request(**overrides):
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "manual",
         "source_ref": "conversation:research-adoption",
-        "request": "Research and evaluate adopting deterministic review receipts.",
+        "request": "Evaluate adopting deterministic review receipts.",
         "question": "Should this repository adopt deterministic review receipts?",
-        "constraints": ["No new dependency", "Keep provider code outside the core"],
+        "requirements": [
+            "The receipt binds a decision to immutable local evidence.",
+            "The mechanism adds no runtime dependency.",
+        ],
+        "constraints": ["Keep provider code outside the core."],
+        "success_criteria": [
+            "A repository-native scenario verifies receipt freshness."
+        ],
         "evidence": ["The user explicitly requested an adoption study."],
     }
     value.update(overrides)
     return value
 
 
-def checks(**overrides):
+def requirements_assessment(request_sha256, failed=None, **overrides):
+    criteria = {name: {"status": "pass", "findings": []} for name in REQUIREMENT_NAMES}
+    if failed is not None:
+        criteria[failed] = {
+            "status": "fail",
+            "findings": [f"{failed} needs clarification."],
+        }
     value = {
-        "evidence_quality": {
-            "passed": True,
-            "evidence": ["Two authoritative sources support the mechanism."],
-        },
-        "repository_fit": {
-            "passed": True,
-            "evidence": ["The prototype fits the existing Loop Engine seam."],
-        },
-        "prototype_verified": {
-            "passed": True,
-            "evidence": ["The declared repository-native checks pass."],
-        },
-        "cost_acceptable": {
-            "passed": True,
-            "evidence": ["The change adds no runtime dependency."],
-        },
+        "schema_version": 1,
+        "request_sha256": request_sha256,
+        "criteria": criteria,
     }
     value.update(overrides)
     return value
@@ -67,75 +79,170 @@ def source(**overrides):
     return value
 
 
+def evidence_grade(request_sha256, grade="moderate", **overrides):
+    value = {
+        "schema_version": 1,
+        "request_sha256": request_sha256,
+        "grade": grade,
+        "sources": [source()],
+        "rationale": ["One primary specification and one local observation agree."],
+        "limitations": ["No long-running production data exists yet."],
+    }
+    value.update(overrides)
+    return value
+
+
+def axis(status="pass", findings=None):
+    return {
+        "status": status,
+        "evidence": ["The bounded repository check provides direct evidence."],
+        "findings": (
+            []
+            if findings is None and status == "pass"
+            else findings or ["The axis does not meet the adoption threshold."]
+        ),
+    }
+
+
+def candidate_summary(**overrides):
+    value = {
+        "kind": "feature",
+        "title": "Adopt deterministic review receipts",
+        "problem": "Review decisions are not bound to immutable local evidence.",
+        "evidence": ["The verified prototype produced a current receipt."],
+        "labels": ["research-adoption"],
+    }
+    value.update(overrides)
+    return value
+
+
+def adoption_brief_value(**overrides):
+    value = {
+        "schema_version": 1,
+        "request_sha256": "a" * 64,
+        "requirements_assessment_sha256": "b" * 64,
+        "evidence_grade_sha256": "c" * 64,
+        "prototype_result_sha256": "d" * 64,
+        "scenario_result_sha256": "e" * 64,
+        "verdict": "adopt",
+        "evidence_certainty": {
+            "grade": "moderate",
+            "rationale": ["The evidence is direct but operationally limited."],
+        },
+        "repository_fit": axis(),
+        "prototype_result": axis(),
+        "findings": [],
+        "prototype_disposition": "adopted",
+        "evolution_candidate": candidate_summary(),
+    }
+    value.update(overrides)
+    return value
+
+
 class ResearchValidationTest(unittest.TestCase):
-    def test_request_requires_manual_authority_and_exact_fields(self):
+    def test_request_requires_engineered_requirements_and_exact_fields(self):
         valid = research_adoption_loop.validate_request(request())
         external = research_adoption_loop.validate_request(request(source="scheduler"))
-        unknown = research_adoption_loop.validate_request(request(provider="web"))
-        empty = research_adoption_loop.validate_request(request(constraints=[]))
+        missing_requirements = research_adoption_loop.validate_request(
+            request(requirements=[])
+        )
+        missing_success = research_adoption_loop.validate_request(
+            request(success_criteria=[])
+        )
+        legacy = research_adoption_loop.validate_request(
+            {key: value for key, value in request().items() if key != "requirements"}
+        )
 
         self.assertTrue(valid.allowed, valid.errors)
         self.assertFalse(external.allowed)
-        self.assertIn("source must be manual", " ".join(external.errors))
-        self.assertFalse(unknown.allowed)
-        self.assertFalse(empty.allowed)
+        self.assertFalse(missing_requirements.allowed)
+        self.assertFalse(missing_success.allowed)
+        self.assertFalse(legacy.allowed)
 
-    def test_decision_policy_validates_verdict_checks_and_source_urls(self):
-        base = {
-            "schema_version": 1,
-            "request_sha256": "a" * 64,
-            "prototype_result_sha256": "c" * 64,
-            "scenario_result_sha256": "b" * 64,
-            "sources": [source()],
-        }
-        adopt = research_adoption_loop.validate_decision(
-            {
-                **base,
-                "verdict": "adopt",
-                "checks": checks(),
-                "findings": [],
-                "prototype_disposition": "adopted",
-            }
+    def test_requirements_assessment_is_eight_binary_axes_without_score(self):
+        valid = research_adoption_loop.validate_requirements_assessment(
+            requirements_assessment("a" * 64)
         )
-        rejected_checks = checks(
-            repository_fit={
-                "passed": False,
-                "evidence": ["The prototype conflicts with the local model."],
-            }
+        failed = research_adoption_loop.validate_requirements_assessment(
+            requirements_assessment("a" * 64, failed="clarity")
         )
-        reject = research_adoption_loop.validate_decision(
-            {
-                **base,
-                "verdict": "reject",
-                "checks": rejected_checks,
-                "findings": ["Repository fit is not acceptable."],
-                "prototype_disposition": "removed",
-            }
+        scored = research_adoption_loop.validate_requirements_assessment(
+            requirements_assessment("a" * 64, total_score=87)
         )
-        contradictory = research_adoption_loop.validate_decision(
-            {
-                **base,
-                "verdict": "adopt",
-                "checks": rejected_checks,
-                "findings": [],
-                "prototype_disposition": "adopted",
-            }
+        weighted = requirements_assessment("a" * 64)
+        weighted["criteria"]["clarity"]["weight"] = 0.2
+        weighted_result = research_adoption_loop.validate_requirements_assessment(
+            weighted
         )
-        credential_url = research_adoption_loop.validate_decision(
-            {
-                **base,
-                "verdict": "adopt",
-                "checks": checks(),
-                "findings": [],
-                "prototype_disposition": "adopted",
-                "sources": [source(url="https://user:password@example.org/private")],
-            }
+        contradictory = requirements_assessment("a" * 64, failed="clarity")
+        contradictory["criteria"]["clarity"]["findings"] = []
+
+        self.assertTrue(valid.allowed, valid.errors)
+        self.assertTrue(failed.allowed, failed.errors)
+        self.assertFalse(scored.allowed)
+        self.assertFalse(weighted_result.allowed)
+        self.assertFalse(
+            research_adoption_loop.validate_requirements_assessment(
+                contradictory
+            ).allowed
+        )
+        self.assertNotIn("score", json.dumps(valid.value))
+        self.assertNotIn("weight", json.dumps(valid.value))
+
+    def test_evidence_grade_uses_certainty_labels_not_requirement_quality(self):
+        for grade in ("high", "moderate", "low", "very-low"):
+            with self.subTest(grade=grade):
+                result = research_adoption_loop.validate_evidence_grade(
+                    evidence_grade("a" * 64, grade=grade)
+                )
+                self.assertTrue(result.allowed, result.errors)
+
+        unsupported = research_adoption_loop.validate_evidence_grade(
+            evidence_grade("a" * 64, grade="certain")
+        )
+        scored = research_adoption_loop.validate_evidence_grade(
+            evidence_grade("a" * 64, quality_score=90)
+        )
+        credential = research_adoption_loop.validate_evidence_grade(
+            evidence_grade(
+                "a" * 64,
+                sources=[source(url="https://user:password@example.org/private")],
+            )
+        )
+
+        self.assertFalse(unsupported.allowed)
+        self.assertFalse(scored.allowed)
+        self.assertFalse(credential.allowed)
+
+    def test_adoption_brief_keeps_three_decision_axes_separate(self):
+        adopt = research_adoption_loop.validate_adoption_brief(adoption_brief_value())
+        reject = research_adoption_loop.validate_adoption_brief(
+            adoption_brief_value(
+                verdict="reject",
+                evidence_certainty={
+                    "grade": "low",
+                    "rationale": ["Only indirect evidence is currently available."],
+                },
+                findings=["Evidence is insufficient for adoption."],
+                prototype_disposition="removed",
+                evolution_candidate=None,
+            )
+        )
+        contradictory = research_adoption_loop.validate_adoption_brief(
+            adoption_brief_value(repository_fit=axis("fail"))
+        )
+        scored = research_adoption_loop.validate_adoption_brief(
+            adoption_brief_value(quality_score=92)
+        )
+        combined = research_adoption_loop.validate_adoption_brief(
+            adoption_brief_value(checks={"quality": {"passed": True}})
         )
 
         self.assertTrue(adopt.allowed, adopt.errors)
         self.assertTrue(reject.allowed, reject.errors)
         self.assertFalse(contradictory.allowed)
-        self.assertFalse(credential_url.allowed)
+        self.assertFalse(scored.allowed)
+        self.assertFalse(combined.allowed)
 
 
 class ResearchAdoptionRunTest(unittest.TestCase):
@@ -177,47 +284,52 @@ class ResearchAdoptionRunTest(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def start_evaluate(self, max_iterations=2):
-        started = research_adoption_loop.start_run(
-            self.task,
-            request(),
-            max_iterations=max_iterations,
-        )
+    def request_hash(self):
+        return research_adoption_loop.load_run(self.task).state["request_sha256"]
+
+    def start_gate(self):
+        started = research_adoption_loop.start_run(self.task, request())
         self.assertTrue(started.allowed, started.errors)
-        for phase in ("research", "prototype", "evaluate"):
-            transitioned = research_adoption_loop.transition_run(
-                self.task,
-                phase,
-            )
-            self.assertTrue(transitioned.allowed, transitioned.errors)
+        gate = research_adoption_loop.transition_run(
+            self.task,
+            "requirements-gate",
+        )
+        self.assertTrue(gate.allowed, gate.errors)
         return started
 
-    def decision(
-        self,
-        verdict,
-        decision_checks,
-        findings,
-        prototype_disposition,
-    ):
-        state = research_adoption_loop.load_run(self.task)
-        content = (self.task / "scenario-result.json").read_bytes()
-        prototype_content = (
-            self.task
-            / "iterations"
-            / f"{state.state['iteration']:03d}"
-            / "prototype-result.json"
-        ).read_bytes()
-        return {
-            "schema_version": 1,
-            "request_sha256": state.state["request_sha256"],
-            "prototype_result_sha256": hashlib.sha256(prototype_content).hexdigest(),
-            "scenario_result_sha256": hashlib.sha256(content).hexdigest(),
-            "verdict": verdict,
-            "sources": [source()],
-            "checks": decision_checks,
-            "findings": findings,
-            "prototype_disposition": prototype_disposition,
-        }
+    def start_research(self):
+        started = self.start_gate()
+        assessed = research_adoption_loop.assess_requirements(
+            self.task,
+            requirements_assessment(self.request_hash()),
+        )
+        self.assertTrue(assessed.allowed, assessed.errors)
+        self.assertEqual(assessed.state["status"], "research")
+        return started
+
+    def start_prototype(self, grade="moderate"):
+        started = self.start_research()
+        evidence_phase = research_adoption_loop.transition_run(
+            self.task,
+            "evidence-grade",
+        )
+        self.assertTrue(evidence_phase.allowed, evidence_phase.errors)
+        graded = research_adoption_loop.submit_evidence_grade(
+            self.task,
+            evidence_grade(self.request_hash(), grade=grade),
+        )
+        self.assertTrue(graded.allowed, graded.errors)
+        self.assertEqual(graded.state["status"], "prototype")
+        return started
+
+    def start_verification(self, grade="moderate"):
+        started = self.start_prototype(grade)
+        verification = research_adoption_loop.transition_run(
+            self.task,
+            "verification",
+        )
+        self.assertTrue(verification.allowed, verification.errors)
+        return started
 
     def set_scenario_exit(self, code):
         contract = json.loads(self.contract_path.read_text(encoding="utf-8"))
@@ -228,76 +340,159 @@ class ResearchAdoptionRunTest(unittest.TestCase):
         ]
         self.contract_path.write_text(json.dumps(contract), encoding="utf-8")
 
-    def test_start_persists_frame_state_and_active_pointer(self):
+    def run_and_capture(self):
+        run = scenario_gate.run_scenarios(self.task, self.project)
+        self.assertTrue(run.result_written, run.errors)
+        captured = research_adoption_loop.capture_prototype_result(
+            self.task,
+            self.project,
+        )
+        self.assertTrue(captured.allowed, captured.errors)
+
+    def brief(
+        self,
+        verdict="adopt",
+        grade="moderate",
+        repository_fit=None,
+        prototype_result=None,
+    ):
+        state = research_adoption_loop.load_run(self.task)
+        assessment_content = (self.task / "requirements-assessment.json").read_bytes()
+        grade_content = (self.task / "evidence-grade.json").read_bytes()
+        prototype_content = (
+            self.task / "iterations" / "001" / "prototype-result.json"
+        ).read_bytes()
+        current_content = (self.task / "scenario-result.json").read_bytes()
+        return adoption_brief_value(
+            request_sha256=state.state["request_sha256"],
+            requirements_assessment_sha256=hashlib.sha256(
+                assessment_content
+            ).hexdigest(),
+            evidence_grade_sha256=hashlib.sha256(grade_content).hexdigest(),
+            prototype_result_sha256=hashlib.sha256(prototype_content).hexdigest(),
+            scenario_result_sha256=hashlib.sha256(current_content).hexdigest(),
+            verdict=verdict,
+            evidence_certainty={
+                "grade": grade,
+                "rationale": [
+                    "One primary specification and one local observation agree."
+                ],
+            },
+            repository_fit=repository_fit or axis(),
+            prototype_result=prototype_result or axis(),
+            findings=(
+                []
+                if verdict == "adopt"
+                else ["The current evidence does not justify adoption."]
+            ),
+            prototype_disposition=("adopted" if verdict == "adopt" else "removed"),
+            evolution_candidate=(candidate_summary() if verdict == "adopt" else None),
+        )
+
+    def test_state_graph_matches_the_replacement_policy(self):
+        self.assertEqual(
+            research_adoption_loop.PHASE_TRANSITIONS,
+            {
+                "frame": frozenset({"requirements-gate"}),
+                "requirements-gate": frozenset({"research"}),
+                "research": frozenset({"evidence-grade"}),
+                "evidence-grade": frozenset({"prototype"}),
+                "prototype": frozenset({"verification"}),
+                "verification": frozenset({"adopted", "rejected"}),
+            },
+        )
+
+    def test_start_persists_frame_with_one_non_scored_pass(self):
         result = research_adoption_loop.start_run(self.task, request())
 
         self.assertTrue(result.allowed, result.errors)
         self.assertEqual(result.state["status"], "frame")
-        self.assertEqual(len(result.state["request_sha256"]), 64)
+        self.assertEqual(result.state["max_iterations"], 1)
         self.assertTrue((self.task / "research-request.json").is_file())
-        self.assertEqual(
-            (self.task.parent / ".active-research-adoption").read_text(
-                encoding="utf-8"
+
+    def test_failed_requirements_gate_stops_before_research(self):
+        self.start_gate()
+        result = research_adoption_loop.assess_requirements(
+            self.task,
+            requirements_assessment(
+                self.request_hash(),
+                failed="clarity",
             ),
-            "_workspace/research-adoption\n",
         )
 
-    def test_adopt_requires_current_completion_and_archives_decision(self):
-        self.start_evaluate()
+        self.assertTrue(result.allowed, result.errors)
+        self.assertEqual(result.state["status"], "needs-clarification")
+        self.assertTrue((self.task / "requirements-assessment.json").is_file())
+        blocked = research_adoption_loop.transition_run(self.task, "research")
+        self.assertFalse(blocked.allowed)
+
+    def test_passing_requirements_gate_enters_research(self):
+        self.start_gate()
+
+        result = research_adoption_loop.assess_requirements(
+            self.task,
+            requirements_assessment(self.request_hash()),
+        )
+
+        self.assertTrue(result.allowed, result.errors)
+        self.assertEqual(result.state["status"], "research")
+
+    def test_evidence_grade_is_persisted_before_prototype(self):
+        self.start_research()
         self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
+            research_adoption_loop.transition_run(
+                self.task,
+                "evidence-grade",
+            ).allowed
         )
-        captured = research_adoption_loop.capture_prototype_result(
+
+        result = research_adoption_loop.submit_evidence_grade(
+            self.task,
+            evidence_grade(self.request_hash(), grade="very-low"),
+        )
+
+        self.assertTrue(result.allowed, result.errors)
+        self.assertEqual(result.state["status"], "prototype")
+        stored = json.loads(
+            (self.task / "evidence-grade.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(stored["grade"], "very-low")
+
+    def test_adopt_requires_verification_and_writes_adoption_brief(self):
+        self.start_verification()
+        self.run_and_capture()
+
+        result = research_adoption_loop.submit_adoption_brief(
             self.task,
             self.project,
-        )
-        self.assertTrue(captured.allowed, captured.errors)
-
-        adopted = research_adoption_loop.submit_decision(
-            self.task,
-            self.project,
-            self.decision("adopt", checks(), [], "adopted"),
+            self.brief(),
         )
 
-        self.assertTrue(adopted.allowed, adopted.errors)
-        self.assertEqual(adopted.state["status"], "adopted")
-        self.assertTrue((self.task / "iterations" / "001" / "decision.json").is_file())
+        self.assertTrue(result.allowed, result.errors)
+        self.assertEqual(result.state["status"], "adopted")
+        self.assertTrue((self.task / "adoption-brief.json").is_file())
+        self.assertFalse((self.task / "iterations" / "001" / "decision.json").exists())
 
-    def test_reject_requires_failed_check_finding_and_removed_prototype(self):
-        self.start_evaluate()
+    def test_reject_preserves_failed_prototype_and_clean_completion(self):
+        self.start_verification(grade="low")
         self.set_scenario_exit(9)
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        captured = research_adoption_loop.capture_prototype_result(
-            self.task,
-            self.project,
-        )
-        self.assertTrue(captured.allowed, captured.errors)
+        self.run_and_capture()
         self.set_scenario_exit(0)
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        failed = checks(
-            repository_fit={
-                "passed": False,
-                "evidence": ["The prototype conflicts with the local model."],
-            }
-        )
+        run = scenario_gate.run_scenarios(self.task, self.project)
+        self.assertTrue(run.result_written, run.errors)
 
-        rejected = research_adoption_loop.submit_decision(
+        result = research_adoption_loop.submit_adoption_brief(
             self.task,
             self.project,
-            self.decision(
-                "reject",
-                failed,
-                ["Repository fit is not acceptable."],
-                "removed",
+            self.brief(
+                verdict="reject",
+                grade="low",
+                prototype_result=axis("fail"),
             ),
         )
 
-        self.assertTrue(rejected.allowed, rejected.errors)
-        self.assertEqual(rejected.state["status"], "rejected")
+        self.assertTrue(result.allowed, result.errors)
+        self.assertEqual(result.state["status"], "rejected")
         archived = json.loads(
             (self.task / "iterations" / "001" / "prototype-result.json").read_text(
                 encoding="utf-8"
@@ -305,91 +500,77 @@ class ResearchAdoptionRunTest(unittest.TestCase):
         )
         self.assertEqual(archived["results"][0]["status"], "failed")
 
-    def test_iterate_accepts_current_failed_scenario_and_exhausts_budget(self):
-        self.start_evaluate(max_iterations=1)
-        self.set_scenario_exit(9)
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        captured = research_adoption_loop.capture_prototype_result(
-            self.task,
-            self.project,
-        )
-        self.assertTrue(captured.allowed, captured.errors)
-        inconclusive = checks(
-            prototype_verified={
-                "passed": False,
-                "evidence": ["The prototype check failed."],
-            }
-        )
-
-        result = research_adoption_loop.submit_decision(
-            self.task,
-            self.project,
-            self.decision(
-                "iterate",
-                inconclusive,
-                ["Collect a smaller reproducible prototype."],
-                "removed",
-            ),
-        )
-
-        self.assertTrue(result.allowed, result.errors)
-        self.assertEqual(result.state["status"], "budget-exhausted")
-
-    def test_stale_decision_cannot_change_state(self):
-        self.start_evaluate()
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        captured = research_adoption_loop.capture_prototype_result(
-            self.task,
-            self.project,
-        )
-        self.assertTrue(captured.allowed, captured.errors)
-        decision = self.decision("adopt", checks(), [], "adopted")
+    def test_stale_brief_cannot_change_verification_state(self):
+        self.start_verification()
+        self.run_and_capture()
+        brief = self.brief()
         (self.project / "src" / "app.txt").write_text(
             "changed\n",
             encoding="utf-8",
         )
 
-        result = research_adoption_loop.submit_decision(
+        result = research_adoption_loop.submit_adoption_brief(
             self.task,
             self.project,
-            decision,
+            brief,
         )
 
         self.assertFalse(result.allowed)
-        self.assertEqual(result.state["status"], "evaluate")
+        self.assertEqual(result.state["status"], "verification")
         self.assertIn("source_fingerprint is stale", " ".join(result.errors))
 
-    def test_decision_requires_a_captured_prototype_result(self):
-        self.start_evaluate()
-        self.assertTrue(
-            scenario_gate.run_scenarios(self.task, self.project).result_written
-        )
-        state = research_adoption_loop.load_run(self.task)
-        current = (self.task / "scenario-result.json").read_bytes()
-        decision = {
-            "schema_version": 1,
-            "request_sha256": state.state["request_sha256"],
-            "prototype_result_sha256": "a" * 64,
-            "scenario_result_sha256": hashlib.sha256(current).hexdigest(),
-            "verdict": "adopt",
-            "sources": [source()],
-            "checks": checks(),
-            "findings": [],
-            "prototype_disposition": "adopted",
-        }
-
-        result = research_adoption_loop.submit_decision(
+    def test_only_adopted_current_brief_can_export_evolution_candidate(self):
+        self.start_verification()
+        self.run_and_capture()
+        adopted = research_adoption_loop.submit_adoption_brief(
             self.task,
             self.project,
-            decision,
+            self.brief(),
+        )
+        self.assertTrue(adopted.allowed, adopted.errors)
+
+        handoff = research_adoption_loop.export_evolution_candidate(
+            self.task,
+            self.project,
         )
 
-        self.assertFalse(result.allowed)
-        self.assertIn("cannot read captured prototype result", " ".join(result.errors))
+        self.assertTrue(handoff.allowed, handoff.errors)
+        candidate = json.loads(
+            (self.task / "evolution-candidate.json").read_text(encoding="utf-8")
+        )
+        validation = evolution_loop.validate_candidate(candidate)
+        self.assertTrue(validation.allowed, validation.errors)
+        self.assertEqual(candidate["request"], request()["request"])
+
+        assessment_path = self.task / "requirements-assessment.json"
+        assessment_path.write_text(
+            assessment_path.read_text(encoding="utf-8") + " ",
+            encoding="utf-8",
+        )
+        stale = research_adoption_loop.export_evolution_candidate(
+            self.task,
+            self.project,
+        )
+        self.assertFalse(stale.allowed)
+        self.assertIn("requirements_assessment_sha256 is stale", stale.errors)
+
+    def test_rejected_brief_cannot_export_evolution_candidate(self):
+        self.start_verification(grade="low")
+        self.run_and_capture()
+        rejected = research_adoption_loop.submit_adoption_brief(
+            self.task,
+            self.project,
+            self.brief(verdict="reject", grade="low"),
+        )
+        self.assertTrue(rejected.allowed, rejected.errors)
+
+        handoff = research_adoption_loop.export_evolution_candidate(
+            self.task,
+            self.project,
+        )
+
+        self.assertFalse(handoff.allowed)
+        self.assertIn("only an adopted brief", " ".join(handoff.errors))
 
     def test_cli_start_and_status_use_the_direct_workspace_task(self):
         input_path = self.task / "request-input.json"

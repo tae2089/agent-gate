@@ -1,4 +1,4 @@
 interface:
   display_name: "Research Adoption Loop"
-  short_description: "Evaluate research through a verified local prototype"
-  default_prompt: "Use $research-adoption-loop to research and evaluate adopting this technique in the current repository."
+  short_description: "Gate requirements before adoption research"
+  default_prompt: "Use $research-adoption-loop to assess requirements, grade evidence, and verify whether this repository should adopt the technique."

@@ -11,7 +11,7 @@ one-shot validator, hook, or adapter is not a Loop Pack.
 | `evolution-loop` | executable scenarios plus scope evaluation | verified PR is ready or opened |
 | `ci-repair-loop` | repository-native reproductions of requested failing checks | fresh 100% Completion reaches `checks-green` |
 | `review-loop` | current source-bound actionable diff findings | no actionable findings remain and Completion is fresh 100% |
-| `research-adoption-loop` | cited source evidence plus a preserved, content-bound local prototype result | adopt or reject decision is recorded with fresh 100% Completion |
+| `research-adoption-loop` | eight-axis requirements Gate, ordinal evidence certainty, repository fit, and a preserved prototype result | a Gate-passed adoption brief records adopt/reject with fresh 100% Completion; only adopt can derive an Evolution candidate |
 
 ## Candidates
 
